@@ -1,8 +1,14 @@
 #include "App.hpp"
+#include "shaders/UniformParams.h"
 
+#include <cstdint>
+#include <cstring>
 #include <etna/Etna.hpp>
 #include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
+#include <glm/fwd.hpp>
+#include <vulkan/vulkan_enums.hpp>
+#include <vulkan/vulkan_structs.hpp>
 
 
 App::App()
@@ -44,6 +50,8 @@ App::App()
     .resolution = resolution,
   });
 
+  osWindow->captureMouse = true;
+
   // But we also need to hook the OS window up to Vulkan manually!
   {
     // First, we ask GLFW to provide a "surface" for the window,
@@ -75,6 +83,29 @@ App::App()
 
 
   // TODO: Initialize any additional resources you require here!
+  etna::create_program("toy", {LOCAL_SHADERTOY1_SHADERS_ROOT "toy.comp.spv"});
+
+  m_Image = etna::get_context().createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+    .name = "mainImage",
+    .format = vk::Format::eR8G8B8A8Unorm,
+    .imageUsage = vk::ImageUsageFlagBits::eStorage| vk::ImageUsageFlagBits::eTransferSrc});
+
+  defaultSampler = etna::Sampler(etna::Sampler::CreateInfo{.name = "default_sampler"});
+
+  uniformParams = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
+    .size = sizeof(UniformParams),
+    .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
+    .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
+    .name = "uniform_params",
+  });
+
+  uniformParams.map();
+
+
+  pipeline = etna::get_context().getPipelineManager().createComputePipeline("toy", {});
+
+
 }
 
 App::~App()
@@ -87,6 +118,11 @@ void App::run()
   while (!osWindow->isBeingClosed())
   {
     windowing.poll();
+
+    params.iTime = static_cast<float>(windowing.getTime());
+    params.iResolution = resolution;
+    params.iMouse += osWindow->mouse.capturedPosDelta;
+    memcpy(uniformParams.data(), &params, sizeof(params));
 
     drawFrame();
   }
@@ -115,6 +151,87 @@ void App::drawFrame()
 
     ETNA_CHECK_VK_RESULT(currentCmdBuf.begin(vk::CommandBufferBeginInfo{}));
     {
+      etna::set_state(
+        currentCmdBuf,
+        m_Image.get(),
+        vk::PipelineStageFlagBits2::eComputeShader,
+        vk::AccessFlagBits2::eShaderStorageWrite,
+        vk::ImageLayout::eGeneral,
+        vk::ImageAspectFlagBits::eColor);
+      etna::flush_barriers(currentCmdBuf);
+
+
+      auto toyInfo = etna::get_shader_program("toy");
+      auto set = etna::create_descriptor_set(
+        toyInfo.getDescriptorLayoutId(0),
+        currentCmdBuf,
+        {
+          etna::Binding{7, uniformParams.genBinding()},
+          etna::Binding{8, m_Image.genBinding(defaultSampler.get(), vk::ImageLayout::eGeneral)},
+        });
+
+      vk::DescriptorSet vkSet = set.getVkSet();
+
+      currentCmdBuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getVkPipeline());
+      currentCmdBuf.bindDescriptorSets(
+        vk::PipelineBindPoint::eCompute, 
+        pipeline.getVkPipelineLayout(), 
+        0, 
+        {set.getVkSet()}, 
+        {}
+      );
+      
+      currentCmdBuf.dispatch(
+        (resolution.x + 31) / 32,
+        (resolution.y + 31) / 32, 
+        1
+      );    
+
+      etna::set_state(
+        currentCmdBuf,
+        m_Image.get(),
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::AccessFlagBits2::eTransferRead,
+        vk::ImageLayout::eTransferSrcOptimal,
+        vk::ImageAspectFlagBits::eColor);
+
+      etna::set_state(
+        currentCmdBuf,
+        backbuffer,
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageAspectFlagBits::eColor);
+      etna::flush_barriers(currentCmdBuf);      
+      
+      currentCmdBuf.blitImage(
+        m_Image.get(), 
+        vk::ImageLayout::eGeneral, 
+        backbuffer, 
+        vk::ImageLayout::eTransferDstOptimal, 
+        {vk::ImageBlit{
+          .srcSubresource = vk::ImageSubresourceLayers{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+          },
+          .srcOffsets = {{
+            vk::Offset3D{0,0,0}, 
+            vk::Offset3D{(int32_t)resolution.x, (int32_t)resolution.y, 1}
+          }},
+          .dstSubresource = vk::ImageSubresourceLayers{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+          },
+          .dstOffsets = {{
+            vk::Offset3D{0,0,0}, 
+            vk::Offset3D{(int32_t)resolution.x, (int32_t)resolution.y, 1}
+        }},
+        }},
+      vk::Filter::eLinear);
       // First of all, we need to "initialize" th "backbuffer", aka the current swapchain
       // image, into a state that is appropriate for us working with it. The initial state
       // is considered to be "undefined" (aka "I contain trash memory"), by the way.
