@@ -170,7 +170,7 @@ void App::drawFrame()
           etna::Binding{8, m_Image.genBinding(defaultSampler.get(), vk::ImageLayout::eGeneral)},
         });
 
-      vk::DescriptorSet vkSet = set.getVkSet();
+      //vk::DescriptorSet vkSet = set.getVkSet();
 
       currentCmdBuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getVkPipeline());
       currentCmdBuf.bindDescriptorSets(
