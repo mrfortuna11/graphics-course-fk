@@ -33,7 +33,6 @@ private:
   std::unique_ptr<etna::Window> vkWindow;
   std::unique_ptr<etna::PerFrameCmdMgr> commandManager;
   etna::ComputePipeline pipeline;
-  
   etna::Sampler defaultSampler;
   etna::Image m_Image;
   etna::Buffer uniformParams;
