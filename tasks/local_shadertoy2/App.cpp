@@ -26,33 +26,37 @@ App::App()
     std::vector<const char*> instanceExtensions{glfwInstExts.begin(), glfwInstExts.end()};
     std::vector<const char*> deviceExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-    etna::initialize(etna::InitParams{
-      .applicationName = "Local Shadertoy",
-      .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
-      .instanceExtensions = instanceExtensions,
-      .deviceExtensions = deviceExtensions,
-      .physicalDeviceIndexOverride = {},
-      .numFramesInFlight = 1,
-    });
+    etna::initialize(
+      etna::InitParams{
+        .applicationName = "Local Shadertoy",
+        .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+        .instanceExtensions = instanceExtensions,
+        .deviceExtensions = deviceExtensions,
+        .physicalDeviceIndexOverride = {},
+        .numFramesInFlight = 1,
+      });
   }
 
-  osWindow = windowing.createWindow(OsWindow::CreateInfo{
-    .resolution = resolution,
-  });
+  osWindow = windowing.createWindow(
+    OsWindow::CreateInfo{
+      .resolution = resolution,
+    });
 
   osWindow->captureMouse = true;
 
   {
     auto surface = osWindow->createVkSurface(etna::get_context().getInstance());
 
-    vkWindow = etna::get_context().createWindow(etna::Window::CreateInfo{
-      .surface = std::move(surface),
-    });
+    vkWindow = etna::get_context().createWindow(
+      etna::Window::CreateInfo{
+        .surface = std::move(surface),
+      });
 
-    auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
-      .resolution = {resolution.x, resolution.y},
-      .vsync = useVsync,
-    });
+    auto [w, h] = vkWindow->recreateSwapchain(
+      etna::Window::DesiredProperties{
+        .resolution = {resolution.x, resolution.y},
+        .vsync = useVsync,
+      });
 
     resolution = {w, h};
   }
@@ -72,16 +76,19 @@ App::App()
     {LOCAL_SHADERTOY2_SHADERS_ROOT "toy_buffer.frag.spv",
      LOCAL_SHADERTOY2_SHADERS_ROOT "toy.vert.spv"});
 
-  mainImage = etna::get_context().createImage(etna::Image::CreateInfo{
-    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-    .name = "main_image",
-    .format = vkWindow->getCurrentFormat(),
-    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc});
-  proceduralImage = etna::get_context().createImage(etna::Image::CreateInfo{
-    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-    .name = "proc_image",
-    .format = vkWindow->getCurrentFormat(),
-    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled});
+  mainImage = etna::get_context().createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+      .name = "main_image",
+      .format = vkWindow->getCurrentFormat(),
+      .imageUsage =
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc});
+  proceduralImage = etna::get_context().createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+      .name = "proc_image",
+      .format = vkWindow->getCurrentFormat(),
+      .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled});
 
   auto getMipCountForDim = [](uint32_t w, uint32_t h) {
     return (uint32_t)floor(log2(std::max(w, h))) + 1;
@@ -90,138 +97,136 @@ App::App()
     [this](etna::Image& tex, uint32_t w, uint32_t h, uint32_t mip_count, uint32_t layer_count) {
       auto cmdBuf = oneShotCommands->start();
 
-    ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
-    {
-      vk::ImageMemoryBarrier initialBarrier{
-        .srcAccessMask = vk::AccessFlagBits::eNone,
-        .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
-        .oldLayout = vk::ImageLayout::eUndefined, 
-        .newLayout = vk::ImageLayout::eGeneral,
-        .image = tex.get(),
-        .subresourceRange = {
-          .aspectMask = vk::ImageAspectFlagBits::eColor,
-          .baseMipLevel = 0,
-          .levelCount = mip_count,
-          .baseArrayLayer = 0,
-          .layerCount = layer_count
-        }
-      };
-
-      cmdBuf.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTopOfPipe,
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::DependencyFlags{},
-        0, nullptr,
-        0, nullptr,
-        1, &initialBarrier
-      );
-
-      for (uint32_t level = 1; level < mip_count; ++level)
+      ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
       {
-        vk::ImageMemoryBarrier srcBarrier{
-          .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-          .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-          .oldLayout = vk::ImageLayout::eGeneral,
-          .newLayout = vk::ImageLayout::eGeneral,
-          .image = tex.get(),
-          .subresourceRange = {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .baseMipLevel = level - 1,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = layer_count
-          }
-        };
-
-        vk::ImageMemoryBarrier dstBarrier{
+        vk::ImageMemoryBarrier initialBarrier{
           .srcAccessMask = vk::AccessFlagBits::eNone,
-          .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-          .oldLayout = vk::ImageLayout::eGeneral,
+          .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
+          .oldLayout = vk::ImageLayout::eUndefined,
           .newLayout = vk::ImageLayout::eGeneral,
           .image = tex.get(),
           .subresourceRange = {
             .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .baseMipLevel = level,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = layer_count
-          }
-        };
-
-        std::array<vk::ImageMemoryBarrier, 2> barriers = {srcBarrier, dstBarrier};
-        
-        cmdBuf.pipelineBarrier(
-          vk::PipelineStageFlagBits::eTransfer,
-          vk::PipelineStageFlagBits::eTransfer,
-          vk::DependencyFlags{},
-          0, nullptr,
-          0, nullptr,
-          barriers.size(), barriers.data()
-        );
-
-        vk::ImageBlit blit{
-          .srcSubresource = {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .mipLevel = level - 1,
-            .baseArrayLayer = 0,
-            .layerCount = layer_count},
-          .dstSubresource = {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .mipLevel = level,
+            .baseMipLevel = 0,
+            .levelCount = mip_count,
             .baseArrayLayer = 0,
             .layerCount = layer_count}};
-        
-        blit.srcOffsets[0] = blit.dstOffsets[0] = {0, 0, 0};
-        blit.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
-        blit.dstOffsets[1] = {(int32_t)std::max(w / 2, 1u), (int32_t)std::max(h / 2, 1u), 1};
 
-        w = blit.dstOffsets[1].x;
-        h = blit.dstOffsets[1].y;
+        cmdBuf.pipelineBarrier(
+          vk::PipelineStageFlagBits::eTopOfPipe,
+          vk::PipelineStageFlagBits::eTransfer,
+          vk::DependencyFlags{},
+          0,
+          nullptr,
+          0,
+          nullptr,
+          1,
+          &initialBarrier);
 
-        cmdBuf.blitImage(
-          tex.get(),
-          vk::ImageLayout::eGeneral,
-          tex.get(),
-          vk::ImageLayout::eGeneral,
-          {blit},
-          vk::Filter::eLinear);
-      }
+        for (uint32_t level = 1; level < mip_count; ++level)
+        {
+          vk::ImageMemoryBarrier srcBarrier{
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = tex.get(),
+            .subresourceRange = {
+              .aspectMask = vk::ImageAspectFlagBits::eColor,
+              .baseMipLevel = level - 1,
+              .levelCount = 1,
+              .baseArrayLayer = 0,
+              .layerCount = layer_count}};
 
-      vk::ImageMemoryBarrier finalBarrier{
-        .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-        .oldLayout = vk::ImageLayout::eGeneral,
-        .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        .image = tex.get(),
-        .subresourceRange = {
-          .aspectMask = vk::ImageAspectFlagBits::eColor,
-          .baseMipLevel = 0,
-          .levelCount = mip_count,
-          .baseArrayLayer = 0,
-          .layerCount = layer_count
+          vk::ImageMemoryBarrier dstBarrier{
+            .srcAccessMask = vk::AccessFlagBits::eNone,
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = tex.get(),
+            .subresourceRange = {
+              .aspectMask = vk::ImageAspectFlagBits::eColor,
+              .baseMipLevel = level,
+              .levelCount = 1,
+              .baseArrayLayer = 0,
+              .layerCount = layer_count}};
+
+          std::array<vk::ImageMemoryBarrier, 2> barriers = {srcBarrier, dstBarrier};
+
+          cmdBuf.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::DependencyFlags{},
+            0,
+            nullptr,
+            0,
+            nullptr,
+            barriers.size(),
+            barriers.data());
+
+          vk::ImageBlit blit{
+            .srcSubresource =
+              {.aspectMask = vk::ImageAspectFlagBits::eColor,
+               .mipLevel = level - 1,
+               .baseArrayLayer = 0,
+               .layerCount = layer_count},
+            .dstSubresource = {
+              .aspectMask = vk::ImageAspectFlagBits::eColor,
+              .mipLevel = level,
+              .baseArrayLayer = 0,
+              .layerCount = layer_count}};
+
+          blit.srcOffsets[0] = blit.dstOffsets[0] = {0, 0, 0};
+          blit.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
+          blit.dstOffsets[1] = {(int32_t)std::max(w / 2, 1u), (int32_t)std::max(h / 2, 1u), 1};
+
+          w = blit.dstOffsets[1].x;
+          h = blit.dstOffsets[1].y;
+
+          cmdBuf.blitImage(
+            tex.get(),
+            vk::ImageLayout::eGeneral,
+            tex.get(),
+            vk::ImageLayout::eGeneral,
+            {blit},
+            vk::Filter::eLinear);
         }
-      };
 
-      cmdBuf.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eFragmentShader, 
-        vk::DependencyFlags{},
-        0, nullptr,
-        0, nullptr,
-        1, &finalBarrier
-      );
-    }
-    ETNA_CHECK_VK_RESULT(cmdBuf.end());
+        vk::ImageMemoryBarrier finalBarrier{
+          .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+          .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+          .oldLayout = vk::ImageLayout::eGeneral,
+          .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+          .image = tex.get(),
+          .subresourceRange = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = mip_count,
+            .baseArrayLayer = 0,
+            .layerCount = layer_count}};
 
-    oneShotCommands->submitAndWait(std::move(cmdBuf));
-  };
+        cmdBuf.pipelineBarrier(
+          vk::PipelineStageFlagBits::eTransfer,
+          vk::PipelineStageFlagBits::eFragmentShader,
+          vk::DependencyFlags{},
+          0,
+          nullptr,
+          0,
+          nullptr,
+          1,
+          &finalBarrier);
+      }
+      ETNA_CHECK_VK_RESULT(cmdBuf.end());
+
+      oneShotCommands->submitAndWait(std::move(cmdBuf));
+    };
 
   uint32_t detailMaxLod = 1;
 
   {
     int texW, texH, texChannels;
-    unsigned char* texData = stbi_load(
-      GRAPHICS_COURSE_RESOURCES_ROOT "/textures/tree.png", &texW, &texH, &texChannels, 0);
+    unsigned char* texData =
+      stbi_load(GRAPHICS_COURSE_RESOURCES_ROOT "/textures/tree.png", &texW, &texH, &texChannels, 0);
     ETNA_VERIFY(texData);
 
     ETNA_VERIFYF(texChannels == 3 || texChannels == 4, "Invalid channels={}", texChannels);
@@ -237,13 +242,14 @@ App::App()
 
     uint32_t mipCnt = getMipCountForDim((uint32_t)texW, (uint32_t)texH);
 
-    sourceTexture = etna::get_context().createImage(etna::Image::CreateInfo{
-      .extent = vk::Extent3D{(uint32_t)texW, (uint32_t)texH, 1},
-      .name = "src_tex",
-      .format = vk::Format::eR8G8B8A8Unorm,
-      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc |
-        vk::ImageUsageFlagBits::eTransferDst,
-      .mipLevels = mipCnt});
+    sourceTexture = etna::get_context().createImage(
+      etna::Image::CreateInfo{
+        .extent = vk::Extent3D{(uint32_t)texW, (uint32_t)texH, 1},
+        .name = "src_tex",
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc |
+          vk::ImageUsageFlagBits::eTransferDst,
+        .mipLevels = mipCnt});
 
     transferHelper->uploadImage(*oneShotCommands, sourceTexture, 0, 0, imageData);
     generateTexMipLevels(sourceTexture, texW, texH, mipCnt, 1);
@@ -251,7 +257,6 @@ App::App()
     detailMaxLod = std::max(detailMaxLod, mipCnt);
   }
 
- 
 
   defaultSampler = etna::Sampler{etna::Sampler::CreateInfo{.name = "default_sampler"}};
   detailSampler = etna::Sampler{etna::Sampler::CreateInfo{
@@ -260,12 +265,13 @@ App::App()
     .name = "detail_sampler",
     .maxLod = (float)detailMaxLod}};
 
-  uniformParams = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
-    .size = sizeof(UniformParams),
-    .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
-    .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
-    .name = "uniform_params",
-  });
+  uniformParams = etna::get_context().createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = sizeof(UniformParams),
+      .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
+      .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
+      .name = "uniform_params",
+    });
 
   uniformParams.map();
 
@@ -312,7 +318,8 @@ void App::drawFrame()
 
   if (nextSwapchainImage)
   {
-    auto [backbuffer, backbufferView, backbufferAvailableSem, backbufferReadyForPresent] = *nextSwapchainImage;
+    auto [backbuffer, backbufferView, backbufferAvailableSem, backbufferReadyForPresent] =
+      *nextSwapchainImage;
 
     ETNA_CHECK_VK_RESULT(currentCmdBuf.begin(vk::CommandBufferBeginInfo{}));
     {
@@ -325,7 +332,11 @@ void App::drawFrame()
 
         etna::RenderTargetState target{
           currentCmdBuf,
-          {{0, 0}, {resolution.x, resolution.y,}},
+          {{0, 0},
+           {
+             resolution.x,
+             resolution.y,
+           }},
           {{proceduralImage.get(), proceduralImage.getView({})}},
           {}};
 
@@ -428,8 +439,10 @@ void App::drawFrame()
     }
     ETNA_CHECK_VK_RESULT(currentCmdBuf.end());
 
-    auto renderingDone =
-      commandManager->submit(std::move(currentCmdBuf), std::move(backbufferAvailableSem), std::move(backbufferReadyForPresent));
+    auto renderingDone = commandManager->submit(
+      std::move(currentCmdBuf),
+      std::move(backbufferAvailableSem),
+      std::move(backbufferReadyForPresent));
 
     const bool presented = vkWindow->present(std::move(renderingDone), backbufferView);
 
@@ -441,10 +454,11 @@ void App::drawFrame()
 
   if (!nextSwapchainImage && osWindow->getResolution() != glm::uvec2{0, 0})
   {
-    auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
-      .resolution = {resolution.x, resolution.y},
-      .vsync = useVsync,
-    });
+    auto [w, h] = vkWindow->recreateSwapchain(
+      etna::Window::DesiredProperties{
+        .resolution = {resolution.x, resolution.y},
+        .vsync = useVsync,
+      });
     ETNA_VERIFY((resolution == glm::uvec2{w, h}));
   }
 }
