@@ -1,13 +1,12 @@
 #pragma once
 
-#include "wsi/OsWindowingManager.hpp"
 #include "scene/Camera.hpp"
+#include "wsi/OsWindowingManager.hpp"
+
 
 #include "Renderer.hpp"
 
-
-class App
-{
+class App {
 public:
   App();
 
@@ -17,8 +16,8 @@ private:
   void processInput(float dt);
   void drawFrame();
 
-  void moveCam(Camera& cam, const Keyboard& kb, float dt);
-  void rotateCam(Camera& cam, const Mouse& ms, float dt);
+  void moveCam(Camera &cam, const Keyboard &kb, float dt);
+  void rotateCam(Camera &cam, const Mouse &ms, float dt);
 
 private:
   OsWindowingManager windowing;

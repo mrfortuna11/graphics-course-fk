@@ -2,19 +2,17 @@
 
 #include "shaders/UniformParams.h"
 
-#include <etna/Window.hpp>
-#include <etna/PerFrameCmdMgr.hpp>
-#include <etna/GraphicsPipeline.hpp>
-#include <etna/DescriptorSet.hpp>
 #include <etna/BlockingTransferHelper.hpp>
-#include <etna/Image.hpp>
 #include <etna/Buffer.hpp>
+#include <etna/DescriptorSet.hpp>
+#include <etna/GraphicsPipeline.hpp>
+#include <etna/Image.hpp>
+#include <etna/PerFrameCmdMgr.hpp>
 #include <etna/Sampler.hpp>
+#include <etna/Window.hpp>
 #include <wsi/OsWindowingManager.hpp>
 
-
-class App
-{
+class App {
 public:
   App();
   ~App();

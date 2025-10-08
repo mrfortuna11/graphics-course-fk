@@ -2,9 +2,7 @@
 
 #include <scene/Camera.hpp>
 
-
-struct FramePacket
-{
+struct FramePacket {
   Camera mainCam;
   float currentTime = 0;
 };

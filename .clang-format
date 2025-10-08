@@ -25,3 +25,15 @@ BreakConstructorInitializers: BeforeComma
 BreakInheritanceList: BeforeComma
 PackConstructorInitializers: Never
 ConstructorInitializerIndentWidth: 2
+
+Standard: Cpp17
+DerivePointerAlignment: false
+ReflowComments: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+SpaceAfterCStyleCast: false
+SpacesBeforeTrailingComments: 1
+SpaceBeforeParens: ControlStatements
+IndentCaseLabels: true
+PenaltyBreakAssignment: 2
+PenaltyBreakBeforeFirstCallParameter: 2
+PenaltyExcessCharacter: 100

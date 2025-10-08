@@ -1,8 +1,6 @@
 #include "App.hpp"
 
-
-int main()
-{
+int main() {
   {
     App app;
     app.run();

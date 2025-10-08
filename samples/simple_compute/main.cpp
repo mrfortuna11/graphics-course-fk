@@ -1,8 +1,7 @@
 #include "simple_compute.h"
 #include <etna/Etna.hpp>
 
-int main()
-{
+int main() {
   {
     SimpleCompute app;
 
