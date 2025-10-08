@@ -99,6 +99,7 @@ App::App()
 
       ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
       {
+
         vk::ImageMemoryBarrier initialBarrier{
           .srcAccessMask = vk::AccessFlagBits::eNone,
           .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
@@ -125,33 +126,34 @@ App::App()
 
         for (uint32_t level = 1; level < mip_count; ++level)
         {
-          vk::ImageMemoryBarrier srcBarrier{
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-            .oldLayout = vk::ImageLayout::eGeneral,
-            .newLayout = vk::ImageLayout::eGeneral,
-            .image = tex.get(),
-            .subresourceRange = {
-              .aspectMask = vk::ImageAspectFlagBits::eColor,
-              .baseMipLevel = level - 1,
-              .levelCount = 1,
-              .baseArrayLayer = 0,
-              .layerCount = layer_count}};
 
-          vk::ImageMemoryBarrier dstBarrier{
-            .srcAccessMask = vk::AccessFlagBits::eNone,
-            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .oldLayout = vk::ImageLayout::eGeneral,
-            .newLayout = vk::ImageLayout::eGeneral,
-            .image = tex.get(),
-            .subresourceRange = {
-              .aspectMask = vk::ImageAspectFlagBits::eColor,
-              .baseMipLevel = level,
-              .levelCount = 1,
-              .baseArrayLayer = 0,
-              .layerCount = layer_count}};
+          std::vector<vk::ImageMemoryBarrier> barriers;
 
-          std::array<vk::ImageMemoryBarrier, 2> barriers = {srcBarrier, dstBarrier};
+          barriers.push_back(
+            {.srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+             .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+             .oldLayout = vk::ImageLayout::eGeneral,
+             .newLayout = vk::ImageLayout::eGeneral,
+             .image = tex.get(),
+             .subresourceRange = {
+               .aspectMask = vk::ImageAspectFlagBits::eColor,
+               .baseMipLevel = level - 1,
+               .levelCount = 1,
+               .baseArrayLayer = 0,
+               .layerCount = layer_count}});
+
+          barriers.push_back(
+            {.srcAccessMask = vk::AccessFlagBits::eNone,
+             .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+             .oldLayout = vk::ImageLayout::eGeneral,
+             .newLayout = vk::ImageLayout::eGeneral,
+             .image = tex.get(),
+             .subresourceRange = {
+               .aspectMask = vk::ImageAspectFlagBits::eColor,
+               .baseMipLevel = level,
+               .levelCount = 1,
+               .baseArrayLayer = 0,
+               .layerCount = layer_count}});
 
           cmdBuf.pipelineBarrier(
             vk::PipelineStageFlagBits::eTransfer,
@@ -161,7 +163,7 @@ App::App()
             nullptr,
             0,
             nullptr,
-            barriers.size(),
+            static_cast<uint32_t>(barriers.size()),
             barriers.data());
 
           vk::ImageBlit blit{
@@ -176,12 +178,15 @@ App::App()
               .baseArrayLayer = 0,
               .layerCount = layer_count}};
 
-          blit.srcOffsets[0] = blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
-          blit.srcOffsets[1] = vk::Offset3D{(int32_t)w, (int32_t)h, 1};
-          blit.dstOffsets[1] = vk::Offset3D{(int32_t)std::max(w / 2, 1u), (int32_t)std::max(h / 2, 1u), 1};
 
-          w = blit.dstOffsets[1].x;
-          h = blit.dstOffsets[1].y;
+          blit.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+          blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+          blit.srcOffsets[1] = vk::Offset3D{(int32_t)w, (int32_t)h, 1};
+          blit.dstOffsets[1] =
+            vk::Offset3D{(int32_t)std::max(w / 2, 1u), (int32_t)std::max(h / 2, 1u), 1};
+
+          w = std::max(w / 2, 1u);
+          h = std::max(h / 2, 1u);
 
           cmdBuf.blitImage(
             tex.get(),
@@ -191,6 +196,7 @@ App::App()
             {blit},
             vk::Filter::eLinear);
         }
+
 
         vk::ImageMemoryBarrier finalBarrier{
           .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
@@ -417,7 +423,8 @@ void App::drawFrame()
             .baseArrayLayer = 0,
             .layerCount = 1}};
         blit.srcOffsets[0] = blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
-        blit.srcOffsets[1] = blit.dstOffsets[1] = vk::Offset3D{(int32_t)resolution.x, (int32_t)resolution.y, 1};
+        blit.srcOffsets[1] = blit.dstOffsets[1] =
+          vk::Offset3D{(int32_t)resolution.x, (int32_t)resolution.y, 1};
 
         currentCmdBuf.blitImage(
           mainImage.get(),

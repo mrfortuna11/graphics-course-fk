@@ -6,8 +6,8 @@
 
 struct UniformParams
 {
-  shader_vec2  iResolution;
-  shader_vec2  iMouse;
+  shader_vec2 iResolution;
+  shader_vec2 iMouse;
   shader_float iTime;
 };
 
