@@ -26,14 +26,24 @@ BreakInheritanceList: BeforeComma
 PackConstructorInitializers: Never
 ConstructorInitializerIndentWidth: 2
 
-Standard: Cpp17
+SpaceInEmptyBlock: false
+SpacesInConditionalStatement: false
+
+AlignConsecutiveMaAlignConsecutiveMacros: None
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: false
+  SplitEmptyRecord: false
+
 DerivePointerAlignment: false
-ReflowComments: false
-KeepEmptyLinesAtTheStartOfBlocks: false
-SpaceAfterCStyleCast: false
-SpacesBeforeTrailingComments: 1
-SpaceBeforeParens: ControlStatements
-IndentCaseLabels: true
-PenaltyBreakAssignment: 2
-PenaltyBreakBeforeFirstCallParameter: 2
-PenaltyExcessCharacter: 100
+
+
+
