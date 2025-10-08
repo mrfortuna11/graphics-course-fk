@@ -29,7 +29,7 @@ ConstructorInitializerIndentWidth: 2
 SpaceInEmptyBlock: false
 SpacesInConditionalStatement: false
 
-AlignConsecutiveMaAlignConsecutiveMacros: None
+AlignConsecutiveMacros: None
 AlignConsecutiveAssignments: None
 AlignConsecutiveDeclarations: None
 
