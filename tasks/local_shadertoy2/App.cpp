@@ -33,8 +33,7 @@ App::App()
         .instanceExtensions = instanceExtensions,
         .deviceExtensions = deviceExtensions,
         .physicalDeviceIndexOverride = {},
-        .numFramesInFlight = 1,
-      });
+        .numFramesInFlight = 1});
   }
 
   osWindow = windowing.createWindow(
