@@ -1,4 +1,3 @@
----
 BasedOnStyle: Microsoft
 
 IndentWidth: 2
@@ -17,8 +16,9 @@ Cpp11BracedListStyle: true
 AlignAfterOpenBracket: AlwaysBreak
 ContinuationIndentWidth: 2
 BracedInitializerIndentWidth: 2
-InsertTrailingCommas: Wrapped
-AlignOperands: DontAlign
+
+InsertTrailingCommas: None  
+AlignOperands: Align
 AlwaysBreakTemplateDeclarations: true
 
 BreakConstructorInitializers: BeforeComma
@@ -26,13 +26,8 @@ BreakInheritanceList: BeforeComma
 PackConstructorInitializers: Never
 ConstructorInitializerIndentWidth: 2
 
-SpaceInEmptyBlock: false
-SpacesInConditionalStatement: false
-
-AlignConsecutiveMacros: None
-AlignConsecutiveAssignments: None
-AlignConsecutiveDeclarations: None
-
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterClass: false
@@ -41,9 +36,21 @@ BraceWrapping:
   AfterFunction: true
   AfterNamespace: false
   AfterStruct: false
+  AfterUnion: false
+  BeforeCatch: false
+  BeforeElse: false
+  SplitEmptyFunction: false
   SplitEmptyRecord: false
 
+SpaceBeforeParens: Never
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpaceBeforeSquareBrackets: false
+
+AlignConsecutiveMacros: None
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveBitFields: None
+
 DerivePointerAlignment: false
-
-
-
+Standard: Latest

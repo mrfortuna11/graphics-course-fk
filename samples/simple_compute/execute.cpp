@@ -2,7 +2,8 @@
 
 #include <etna/Etna.hpp>
 
-void SimpleCompute::execute() {
+void SimpleCompute::execute()
+{
   setup();
 
   auto cmdBuf = cmdMgr->start();

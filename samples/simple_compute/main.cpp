@@ -1,7 +1,8 @@
 #include "simple_compute.h"
 #include <etna/Etna.hpp>
 
-int main() {
+int main()
+{
   {
     SimpleCompute app;
 
@@ -9,7 +10,7 @@ int main() {
     app.execute();
   }
 
-  if (etna::is_initilized())
+  if(etna::is_initilized())
     etna::shutdown();
 
   return 0;

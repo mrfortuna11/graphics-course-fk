@@ -28,15 +28,19 @@ public:
   void allocateResources(glm::uvec2 swapchain_resolution);
   void setupPipelines(vk::Format swapchain_format);
 
-  void debugInput(const Keyboard &kb);
-  void update(const FramePacket &packet);
+  void debugInput(const Keyboard& kb);
+  void update(const FramePacket& packet);
   void drawGui();
-  void renderWorld(vk::CommandBuffer cmd_buf, vk::Image target_image,
-                   vk::ImageView target_image_view);
+  void renderWorld(
+    vk::CommandBuffer cmd_buf,
+    vk::Image target_image,
+    vk::ImageView target_image_view);
 
 private:
-  void renderScene(vk::CommandBuffer cmd_buf, const glm::mat4x4 &glob_tm,
-                   vk::PipelineLayout pipeline_layout);
+  void renderScene(
+    vk::CommandBuffer cmd_buf,
+    const glm::mat4x4& glob_tm,
+    vk::PipelineLayout pipeline_layout);
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
@@ -62,10 +66,10 @@ private:
   } lightProps;
 
   UniformParams uniformParams{
-      .lightMatrix = {},
-      .lightPos = {},
-      .time = {},
-      .baseColor = {0.9f, 0.92f, 1.0f},
+    .lightMatrix = {},
+    .lightPos = {},
+    .time = {},
+    .baseColor = {0.9f, 0.92f, 1.0f},
   };
 
   etna::GraphicsPipeline basicForwardPipeline{};

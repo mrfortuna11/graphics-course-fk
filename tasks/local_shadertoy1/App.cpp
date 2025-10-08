@@ -4,7 +4,10 @@
 #include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
 
-App::App() : resolution{1280, 720}, useVsync{true} {
+App::App()
+  : resolution{1280, 720}
+  , useVsync{true}
+{
   // First, we need to initialize Vulkan, which is not trivial because
   // extensions are required for just about anything.
   {
@@ -15,19 +18,19 @@ App::App() : resolution{1280, 720}, useVsync{true} {
     // on the OS.
     auto glfwInstExts = windowing.getRequiredVulkanInstanceExtensions();
 
-    std::vector<const char *> instanceExtensions{glfwInstExts.begin(),
-                                                 glfwInstExts.end()};
+    std::vector<const char*> instanceExtensions{glfwInstExts.begin(), glfwInstExts.end()};
 
     // We also need the swapchain device extension to get access to the OS
     // window from inside of Vulkan on the GPU.
     // Device extensions require HW support from the GPU.
     // Generally, in Vulkan, we call the GPU a "device" and the CPU/OS
     // combination a "host."
-    std::vector<const char *> deviceExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    std::vector<const char*> deviceExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
     // Etna does all of the Vulkan initialization heavy lifting.
     // You can skip figuring out how it works for now.
-    etna::initialize(etna::InitParams{
+    etna::initialize(
+      etna::InitParams{
         .applicationName = "Local Shadertoy",
         .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
         .instanceExtensions = instanceExtensions,
@@ -35,13 +38,14 @@ App::App() : resolution{1280, 720}, useVsync{true} {
         // Replace with an index if etna detects your preferred GPU incorrectly
         .physicalDeviceIndexOverride = {},
         .numFramesInFlight = 1,
-    });
+      });
   }
 
   // Now we can create an OS window
-  osWindow = windowing.createWindow(OsWindow::CreateInfo{
+  osWindow = windowing.createWindow(
+    OsWindow::CreateInfo{
       .resolution = resolution,
-  });
+    });
 
   // But we also need to hook the OS window up to Vulkan manually!
   {
@@ -50,18 +54,20 @@ App::App() : resolution{1280, 720}, useVsync{true} {
     auto surface = osWindow->createVkSurface(etna::get_context().getInstance());
 
     // Then we pass it to Etna to do the complicated work for us
-    vkWindow = etna::get_context().createWindow(etna::Window::CreateInfo{
+    vkWindow = etna::get_context().createWindow(
+      etna::Window::CreateInfo{
         .surface = std::move(surface),
-    });
+      });
 
     // And finally ask Etna to create the actual swapchain so that we can
     // get (different) images each frame to render stuff into.
     // Here, we do not support window resizing, so we only need to call this
     // once.
-    auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
+    auto [w, h] = vkWindow->recreateSwapchain(
+      etna::Window::DesiredProperties{
         .resolution = {resolution.x, resolution.y},
         .vsync = useVsync,
-    });
+      });
 
     // Technically, Vulkan might fail to initialize a swapchain with the
     // requested resolution and pick a different one. This, however, does not
@@ -77,12 +83,14 @@ App::App() : resolution{1280, 720}, useVsync{true} {
   // TODO: Initialize any additional resources you require here!
 }
 
-App::~App() {
+App::~App()
+{
   ETNA_CHECK_VK_RESULT(etna::get_context().getDevice().waitIdle());
 }
 
-void App::run() {
-  while (!osWindow->isBeingClosed()) {
+void App::run()
+{
+  while(!osWindow->isBeingClosed()) {
     windowing.poll();
 
     drawFrame();
@@ -93,7 +101,8 @@ void App::run() {
   ETNA_CHECK_VK_RESULT(etna::get_context().getDevice().waitIdle());
 }
 
-void App::drawFrame() {
+void App::drawFrame()
+{
   // First, get a command buffer to write GPU commands into.
   auto currentCmdBuf = commandManager->acquireNext();
 
@@ -105,9 +114,9 @@ void App::drawFrame() {
 
   // When window is minimized, we can't render anything in Windows
   // because it kills the swapchain, so we skip frames in this case.
-  if (nextSwapchainImage) {
-    auto [backbuffer, backbufferView, backbufferAvailableSem,
-          backbufferReadyForPresentSem] = *nextSwapchainImage;
+  if(nextSwapchainImage) {
+    auto [backbuffer, backbufferView, backbufferAvailableSem, backbufferReadyForPresentSem] =
+      *nextSwapchainImage;
 
     ETNA_CHECK_VK_RESULT(currentCmdBuf.begin(vk::CommandBufferBeginInfo{}));
     {
@@ -118,14 +127,15 @@ void App::drawFrame() {
       // blit". Note that Etna sometimes calls this for you to make life
       // simpler, read Etna's code!
       etna::set_state(
-          currentCmdBuf, backbuffer,
-          // We are going to use the texture at the transfer stage...
-          vk::PipelineStageFlagBits2::eTransfer,
-          // ...to transfer-write stuff into it...
-          vk::AccessFlagBits2::eTransferWrite,
-          // ...and want it to have the appropriate layout.
-          vk::ImageLayout::eTransferDstOptimal,
-          vk::ImageAspectFlagBits::eColor);
+        currentCmdBuf,
+        backbuffer,
+        // We are going to use the texture at the transfer stage...
+        vk::PipelineStageFlagBits2::eTransfer,
+        // ...to transfer-write stuff into it...
+        vk::AccessFlagBits2::eTransferWrite,
+        // ...and want it to have the appropriate layout.
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageAspectFlagBits::eColor);
       // The set_state doesn't actually record any commands, they are deferred
       // to the moment you call flush_barriers. As with set_state, Etna
       // sometimes flushes on it's own. Usually, flushes should be placed before
@@ -138,11 +148,14 @@ void App::drawFrame() {
       // the swpchain image are laid out in memory to something that is
       // appropriate for presenting to the window (while preserving the content
       // of the pixels!).
-      etna::set_state(currentCmdBuf, backbuffer,
-                      // This looks weird, but is correct. Ask about it later.
-                      vk::PipelineStageFlagBits2::eColorAttachmentOutput, {},
-                      vk::ImageLayout::ePresentSrcKHR,
-                      vk::ImageAspectFlagBits::eColor);
+      etna::set_state(
+        currentCmdBuf,
+        backbuffer,
+        // This looks weird, but is correct. Ask about it later.
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        {},
+        vk::ImageLayout::ePresentSrcKHR,
+        vk::ImageAspectFlagBits::eColor);
       // And of course flush the layout transition.
       etna::flush_barriers(currentCmdBuf);
     }
@@ -155,16 +168,16 @@ void App::drawFrame() {
     // result image will be ready for present after backbufferReadyForPresent is
     // signalled by GPU
     auto renderingDone = commandManager->submit(
-        std::move(currentCmdBuf), std::move(backbufferAvailableSem),
-        std::move(backbufferReadyForPresentSem));
+      std::move(currentCmdBuf),
+      std::move(backbufferAvailableSem),
+      std::move(backbufferReadyForPresentSem));
 
     // Finally, present the backbuffer the screen, but only after the GPU tells
     // the OS that it is done executing the command buffer via the renderingDone
     // semaphore.
-    const bool presented =
-        vkWindow->present(std::move(renderingDone), backbufferView);
+    const bool presented = vkWindow->present(std::move(renderingDone), backbufferView);
 
-    if (!presented)
+    if(!presented)
       nextSwapchainImage = std::nullopt;
   }
 
@@ -172,11 +185,12 @@ void App::drawFrame() {
 
   // After a window us un-minimized, we need to restore the swapchain to
   // continue rendering.
-  if (!nextSwapchainImage && osWindow->getResolution() != glm::uvec2{0, 0}) {
-    auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
+  if(!nextSwapchainImage && osWindow->getResolution() != glm::uvec2{0, 0}) {
+    auto [w, h] = vkWindow->recreateSwapchain(
+      etna::Window::DesiredProperties{
         .resolution = {resolution.x, resolution.y},
         .vsync = useVsync,
-    });
+      });
     ETNA_VERIFY((resolution == glm::uvec2{w, h}));
   }
 }
