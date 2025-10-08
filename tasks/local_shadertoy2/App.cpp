@@ -176,9 +176,9 @@ App::App()
               .baseArrayLayer = 0,
               .layerCount = layer_count}};
 
-          blit.srcOffsets[0] = blit.dstOffsets[0] = {0, 0, 0};
-          blit.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
-          blit.dstOffsets[1] = {(int32_t)std::max(w / 2, 1u), (int32_t)std::max(h / 2, 1u), 1};
+          blit.srcOffsets[0] = blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+          blit.srcOffsets[1] = vk::Offset3D{(int32_t)w, (int32_t)h, 1};
+          blit.dstOffsets[1] = vk::Offset3D{(int32_t)std::max(w / 2, 1u), (int32_t)std::max(h / 2, 1u), 1};
 
           w = blit.dstOffsets[1].x;
           h = blit.dstOffsets[1].y;
@@ -416,8 +416,8 @@ void App::drawFrame()
             .mipLevel = 0,
             .baseArrayLayer = 0,
             .layerCount = 1}};
-        blit.srcOffsets[0] = blit.dstOffsets[0] = {0, 0, 0};
-        blit.srcOffsets[1] = blit.dstOffsets[1] = {(int32_t)resolution.x, (int32_t)resolution.y, 1};
+        blit.srcOffsets[0] = blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+        blit.srcOffsets[1] = blit.dstOffsets[1] = vk::Offset3D{(int32_t)resolution.x, (int32_t)resolution.y, 1};
 
         currentCmdBuf.blitImage(
           mainImage.get(),
