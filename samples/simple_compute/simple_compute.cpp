@@ -7,7 +7,8 @@
 
 SimpleCompute::SimpleCompute()
   : length{16}
-{}
+{
+}
 
 void SimpleCompute::setup()
 {
@@ -15,35 +16,30 @@ void SimpleCompute::setup()
 
   // Buffer creation
 
-  bufA = context->createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = sizeof(float) * length,
-      .bufferUsage =
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-      .name = "A",
-    });
+  bufA = context->createBuffer(etna::Buffer::CreateInfo{
+    .size = sizeof(float) * length,
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .name = "A",
+  });
 
-  bufB = context->createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = sizeof(float) * length,
-      .bufferUsage =
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-      .name = "B",
-    });
+  bufB = context->createBuffer(etna::Buffer::CreateInfo{
+    .size = sizeof(float) * length,
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .name = "B",
+  });
 
-  bufResult = context->createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = sizeof(float) * length,
-      .bufferUsage =
-        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc,
-      .name = "m_sum",
-    });
+  bufResult = context->createBuffer(etna::Buffer::CreateInfo{
+    .size = sizeof(float) * length,
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc,
+    .name = "m_sum",
+  });
 
   // Filling the buffers
 
   {
     std::vector<float> values(length);
-    for(uint32_t i = 0; i < values.size(); ++i) {
+    for (uint32_t i = 0; i < values.size(); ++i)
+    {
       values[i] = (float)i;
     }
     transferHelper->uploadBuffer<float>(*cmdMgr, bufA, 0, values);
@@ -51,7 +47,8 @@ void SimpleCompute::setup()
 
   {
     std::vector<float> values(length);
-    for(uint32_t i = 0; i < values.size(); ++i) {
+    for (uint32_t i = 0; i < values.size(); ++i)
+    {
       values[i] = static_cast<float>(i * i);
     }
     transferHelper->uploadBuffer<float>(*cmdMgr, bufB, 0, values);
@@ -80,20 +77,10 @@ void SimpleCompute::buildCommandBuffer(vk::CommandBuffer cmd_buf)
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getVkPipeline());
   cmd_buf.bindDescriptorSets(
-    vk::PipelineBindPoint::eCompute,
-    pipeline.getVkPipelineLayout(),
-    0,
-    1,
-    &vkSet,
-    0,
-    nullptr);
+    vk::PipelineBindPoint::eCompute, pipeline.getVkPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
 
   cmd_buf.pushConstants(
-    pipeline.getVkPipelineLayout(),
-    vk::ShaderStageFlagBits::eCompute,
-    0,
-    sizeof(length),
-    &length);
+    pipeline.getVkPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(length), &length);
 
   etna::flush_barriers(cmd_buf);
 

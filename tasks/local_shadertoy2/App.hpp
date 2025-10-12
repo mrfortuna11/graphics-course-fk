@@ -12,7 +12,8 @@
 #include <etna/Window.hpp>
 #include <wsi/OsWindowingManager.hpp>
 
-class App {
+class App
+{
 public:
   App();
   ~App();

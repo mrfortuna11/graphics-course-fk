@@ -18,7 +18,8 @@
  * this class. This what you want to change and expand between different
  * samples.
  */
-class WorldRenderer {
+class WorldRenderer
+{
 public:
   WorldRenderer();
 
@@ -32,15 +33,11 @@ public:
   void update(const FramePacket& packet);
   void drawGui();
   void renderWorld(
-    vk::CommandBuffer cmd_buf,
-    vk::Image target_image,
-    vk::ImageView target_image_view);
+    vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view);
 
 private:
   void renderScene(
-    vk::CommandBuffer cmd_buf,
-    const glm::mat4x4& glob_tm,
-    vk::PipelineLayout pipeline_layout);
+    vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout);
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
@@ -50,7 +47,8 @@ private:
   etna::Sampler defaultSampler;
   etna::Buffer constants;
 
-  struct PushConstants {
+  struct PushConstants
+  {
     glm::mat4x4 projView;
     glm::mat4x4 model;
   } pushConst2M;
@@ -59,7 +57,8 @@ private:
   glm::mat4x4 lightMatrix;
   glm::vec3 lightPos;
 
-  struct ShadowMapCam {
+  struct ShadowMapCam
+  {
     float radius = 10;
     float lightTargetDist = 24;
     bool usePerspectiveM = false;

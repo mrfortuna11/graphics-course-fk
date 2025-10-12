@@ -19,7 +19,8 @@ using ResolutionProvider = fu2::unique_function<glm::uvec2() const>;
  * sample to another. E.g. initialization, frame delivery logic, window
  * resizing, gui setup, etc.
  */
-class Renderer {
+class Renderer
+{
 public:
   explicit Renderer(glm::uvec2 resolution);
   ~Renderer();

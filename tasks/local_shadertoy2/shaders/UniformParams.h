@@ -3,7 +3,8 @@
 
 #include "cpp_glsl_compat.h"
 
-struct UniformParams {
+struct UniformParams
+{
   shader_vec2 iResolution;
   shader_vec2 iMouse;
   shader_float iTime;

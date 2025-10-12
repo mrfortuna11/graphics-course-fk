@@ -25,36 +25,32 @@ App::App()
     std::vector<const char*> instanceExtensions{glfwInstExts.begin(), glfwInstExts.end()};
     std::vector<const char*> deviceExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-    etna::initialize(
-      etna::InitParams{
-        .applicationName = "Local Shadertoy",
-        .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
-        .instanceExtensions = instanceExtensions,
-        .deviceExtensions = deviceExtensions,
-        .physicalDeviceIndexOverride = {},
-        .numFramesInFlight = 1});
+    etna::initialize(etna::InitParams{
+      .applicationName = "Local Shadertoy",
+      .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+      .instanceExtensions = instanceExtensions,
+      .deviceExtensions = deviceExtensions,
+      .physicalDeviceIndexOverride = {},
+      .numFramesInFlight = 1});
   }
 
-  osWindow = windowing.createWindow(
-    OsWindow::CreateInfo{
-      .resolution = resolution,
-    });
+  osWindow = windowing.createWindow(OsWindow::CreateInfo{
+    .resolution = resolution,
+  });
 
   osWindow->captureMouse = true;
 
   {
     auto surface = osWindow->createVkSurface(etna::get_context().getInstance());
 
-    vkWindow = etna::get_context().createWindow(
-      etna::Window::CreateInfo{
-        .surface = std::move(surface),
-      });
+    vkWindow = etna::get_context().createWindow(etna::Window::CreateInfo{
+      .surface = std::move(surface),
+    });
 
-    auto [w, h] = vkWindow->recreateSwapchain(
-      etna::Window::DesiredProperties{
-        .resolution = {resolution.x, resolution.y},
-        .vsync = useVsync,
-      });
+    auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
+      .resolution = {resolution.x, resolution.y},
+      .vsync = useVsync,
+    });
 
     resolution = {w, h};
   }
@@ -74,19 +70,16 @@ App::App()
     {LOCAL_SHADERTOY2_SHADERS_ROOT "toy_buffer.frag.spv",
      LOCAL_SHADERTOY2_SHADERS_ROOT "toy.vert.spv"});
 
-  mainImage = etna::get_context().createImage(
-    etna::Image::CreateInfo{
-      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-      .name = "main_image",
-      .format = vkWindow->getCurrentFormat(),
-      .imageUsage =
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc});
-  proceduralImage = etna::get_context().createImage(
-    etna::Image::CreateInfo{
-      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-      .name = "proc_image",
-      .format = vkWindow->getCurrentFormat(),
-      .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled});
+  mainImage = etna::get_context().createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+    .name = "main_image",
+    .format = vkWindow->getCurrentFormat(),
+    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc});
+  proceduralImage = etna::get_context().createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+    .name = "proc_image",
+    .format = vkWindow->getCurrentFormat(),
+    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled});
 
   auto getMipCountForDim = [](uint32_t w, uint32_t h) {
     return (uint32_t)floor(log2(std::max(w, h))) + 1;
@@ -242,14 +235,13 @@ App::App()
 
     uint32_t mipCnt = getMipCountForDim((uint32_t)texW, (uint32_t)texH);
 
-    sourceTexture = etna::get_context().createImage(
-      etna::Image::CreateInfo{
-        .extent = vk::Extent3D{(uint32_t)texW, (uint32_t)texH, 1},
-        .name = "src_tex",
-        .format = vk::Format::eR8G8B8A8Unorm,
-        .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc |
-                      vk::ImageUsageFlagBits::eTransferDst,
-        .mipLevels = mipCnt});
+    sourceTexture = etna::get_context().createImage(etna::Image::CreateInfo{
+      .extent = vk::Extent3D{(uint32_t)texW, (uint32_t)texH, 1},
+      .name = "src_tex",
+      .format = vk::Format::eR8G8B8A8Unorm,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc |
+                    vk::ImageUsageFlagBits::eTransferDst,
+      .mipLevels = mipCnt});
 
     transferHelper->uploadImage(*oneShotCommands, sourceTexture, 0, 0, imageData);
     generateTexMipLevels(sourceTexture, texW, texH, mipCnt, 1);
@@ -264,13 +256,12 @@ App::App()
     .name = "detail_sampler",
     .maxLod = (float)detailMaxLod}};
 
-  uniformParams = etna::get_context().createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = sizeof(UniformParams),
-      .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
-      .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
-      .name = "uniform_params",
-    });
+  uniformParams = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
+    .size = sizeof(UniformParams),
+    .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
+    .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
+    .name = "uniform_params",
+  });
 
   uniformParams.map();
 
@@ -453,11 +444,10 @@ void App::drawFrame()
   etna::end_frame();
 
   if(!nextSwapchainImage && osWindow->getResolution() != glm::uvec2{0, 0}) {
-    auto [w, h] = vkWindow->recreateSwapchain(
-      etna::Window::DesiredProperties{
-        .resolution = {resolution.x, resolution.y},
-        .vsync = useVsync,
-      });
+    auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
+      .resolution = {resolution.x, resolution.y},
+      .vsync = useVsync,
+    });
     ETNA_VERIFY((resolution == glm::uvec2{w, h}));
   }
 }

@@ -9,7 +9,8 @@
 
 WorldRenderer::WorldRenderer()
   : sceneMgr{std::make_unique<SceneManager>()}
-{}
+{
+}
 
 void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
 {
@@ -17,31 +18,28 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
 
   auto& ctx = etna::get_context();
 
-  mainViewDepth = ctx.createImage(
-    etna::Image::CreateInfo{
-      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-      .name = "main_view_depth",
-      .format = vk::Format::eD32Sfloat,
-      .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
-    });
+  mainViewDepth = ctx.createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+    .name = "main_view_depth",
+    .format = vk::Format::eD32Sfloat,
+    .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+  });
 
-  shadowMap = ctx.createImage(
-    etna::Image::CreateInfo{
-      .extent = vk::Extent3D{2048, 2048, 1},
-      .name = "shadow_map",
-      .format = vk::Format::eD16Unorm,
-      .imageUsage =
-        vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
-    });
+  shadowMap = ctx.createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{2048, 2048, 1},
+    .name = "shadow_map",
+    .format = vk::Format::eD16Unorm,
+    .imageUsage =
+      vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
+  });
 
   defaultSampler = etna::Sampler(etna::Sampler::CreateInfo{.name = "default_sampler"});
-  constants = ctx.createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = sizeof(UniformParams),
-      .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
-      .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
-      .name = "constants",
-    });
+  constants = ctx.createBuffer(etna::Buffer::CreateInfo{
+    .size = sizeof(UniformParams),
+    .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
+    .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
+    .name = "constants",
+  });
 
   constants.map();
 }
@@ -114,10 +112,10 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
 
 void WorldRenderer::debugInput(const Keyboard& kb)
 {
-  if(kb[KeyboardKey::kQ] == ButtonState::Falling)
+  if (kb[KeyboardKey::kQ] == ButtonState::Falling)
     drawDebugFSQuad = !drawDebugFSQuad;
 
-  if(kb[KeyboardKey::kP] == ButtonState::Falling)
+  if (kb[KeyboardKey::kP] == ButtonState::Falling)
     lightProps.usePerspectiveM = !lightProps.usePerspectiveM;
 }
 
@@ -133,18 +131,16 @@ void WorldRenderer::update(const FramePacket& packet)
 
   // calc light matrix
   {
-    const auto mProj = lightProps.usePerspectiveM ? glm::perspectiveLH_ZO(
-                                                      -glm::radians(packet.shadowCam.fov),
-                                                      1.0f,
-                                                      1.0f,
-                                                      lightProps.lightTargetDist * 2.0f)
-                                                  : glm::orthoLH_ZO(
-                                                      +lightProps.radius,
-                                                      -lightProps.radius,
-                                                      +lightProps.radius,
-                                                      -lightProps.radius,
-                                                      0.0f,
-                                                      lightProps.lightTargetDist);
+    const auto mProj = lightProps.usePerspectiveM
+      ? glm::perspectiveLH_ZO(
+          -glm::radians(packet.shadowCam.fov), 1.0f, 1.0f, lightProps.lightTargetDist * 2.0f)
+      : glm::orthoLH_ZO(
+          +lightProps.radius,
+          -lightProps.radius,
+          +lightProps.radius,
+          -lightProps.radius,
+          0.0f,
+          lightProps.lightTargetDist);
 
     lightMatrix = mProj * packet.shadowCam.viewTm();
 
@@ -162,11 +158,9 @@ void WorldRenderer::update(const FramePacket& packet)
 }
 
 void WorldRenderer::renderScene(
-  vk::CommandBuffer cmd_buf,
-  const glm::mat4x4& glob_tm,
-  vk::PipelineLayout pipeline_layout)
+  vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout)
 {
-  if(!sceneMgr->getVertexBuffer())
+  if (!sceneMgr->getVertexBuffer())
     return;
 
   cmd_buf.bindVertexBuffers(0, {sceneMgr->getVertexBuffer()}, {0});
@@ -180,18 +174,17 @@ void WorldRenderer::renderScene(
   auto meshes = sceneMgr->getMeshes();
   auto relems = sceneMgr->getRenderElements();
 
-  for(std::size_t instIdx = 0; instIdx < instanceMeshes.size(); ++instIdx) {
+  for (std::size_t instIdx = 0; instIdx < instanceMeshes.size(); ++instIdx)
+  {
     pushConst2M.model = instanceMatrices[instIdx];
 
     cmd_buf.pushConstants<PushConstants>(
-      pipeline_layout,
-      vk::ShaderStageFlagBits::eVertex,
-      0,
-      {pushConst2M});
+      pipeline_layout, vk::ShaderStageFlagBits::eVertex, 0, {pushConst2M});
 
     const auto meshIdx = instanceMeshes[instIdx];
 
-    for(std::size_t j = 0; j < meshes[meshIdx].relemCount; ++j) {
+    for (std::size_t j = 0; j < meshes[meshIdx].relemCount; ++j)
+    {
       const auto relemIdx = meshes[meshIdx].firstRelem + j;
       const auto& relem = relems[relemIdx];
       cmd_buf.drawIndexed(relem.indexCount, 1, relem.indexOffset, relem.vertexOffset, 0);
@@ -200,9 +193,7 @@ void WorldRenderer::renderScene(
 }
 
 void WorldRenderer::renderWorld(
-  vk::CommandBuffer cmd_buf,
-  vk::Image target_image,
-  vk::ImageView target_image_view)
+  vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view)
 {
   ETNA_PROFILE_GPU(cmd_buf, renderWorld);
 
@@ -233,8 +224,7 @@ void WorldRenderer::renderWorld(
       cmd_buf,
       {etna::Binding{0, constants.genBinding()},
        etna::Binding{
-         1,
-         shadowMap.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}});
+         1, shadowMap.genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}});
 
     etna::RenderTargetState renderTargets(
       cmd_buf,
@@ -253,7 +243,7 @@ void WorldRenderer::renderWorld(
     renderScene(cmd_buf, worldViewProj, basicForwardPipeline.getVkPipelineLayout());
   }
 
-  if(drawDebugFSQuad)
+  if (drawDebugFSQuad)
     quadRenderer->render(cmd_buf, target_image, target_image_view, shadowMap, defaultSampler);
 }
 
@@ -263,9 +253,7 @@ void WorldRenderer::drawGui()
 
   float color[3]{uniformParams.baseColor.r, uniformParams.baseColor.g, uniformParams.baseColor.b};
   ImGui::ColorEdit3(
-    "Meshes base color",
-    color,
-    ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoInputs);
+    "Meshes base color", color, ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoInputs);
   uniformParams.baseColor = {color[0], color[1], color[2]};
 
   float pos[3]{uniformParams.lightPos.x, uniformParams.lightPos.y, uniformParams.lightPos.z};

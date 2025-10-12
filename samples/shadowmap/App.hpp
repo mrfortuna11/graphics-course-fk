@@ -9,7 +9,8 @@
  * Main class of the application. Contains things that are not strictly
  * related to rendering, e.g. OS window creation, input handling.
  */
-class App {
+class App
+{
 public:
   App();
 
