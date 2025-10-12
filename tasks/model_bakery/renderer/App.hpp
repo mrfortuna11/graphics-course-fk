@@ -6,7 +6,8 @@
 
 #include "Renderer.hpp"
 
-class App {
+class App
+{
 public:
   App();
 

@@ -8,7 +8,8 @@
 #include <etna/GlobalContext.hpp>
 #include <etna/OneShotCmdMgr.hpp>
 
-class SimpleCompute {
+class SimpleCompute
+{
 public:
   SimpleCompute();
 

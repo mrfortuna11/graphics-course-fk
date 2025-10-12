@@ -13,7 +13,8 @@
 
 using ResolutionProvider = fu2::unique_function<glm::uvec2() const>;
 
-class Renderer {
+class Renderer
+{
 public:
   explicit Renderer(glm::uvec2 resolution);
   ~Renderer();

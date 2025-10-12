@@ -115,7 +115,8 @@ App::App()
           1,
           &initialBarrier);
 
-        for(uint32_t level = 1; level < mip_count; ++level) {
+        for (uint32_t level = 1; level < mip_count; ++level)
+        {
 
           std::vector<vk::ImageMemoryBarrier> barriers;
 
@@ -226,9 +227,10 @@ App::App()
     ETNA_VERIFYF(texChannels == 3 || texChannels == 4, "Invalid channels={}", texChannels);
     std::vector<std::byte> imageData{(size_t)(texH * texW * 4)};
     size_t dstId = 0;
-    for(auto* src = texData; src != texData + texW * texH * texChannels; ++src) {
+    for (auto* src = texData; src != texData + texW * texH * texChannels; ++src)
+    {
       imageData[dstId++] = (std::byte)(*src);
-      if(texChannels == 3 && dstId % 4 == 3)
+      if (texChannels == 3 && dstId % 4 == 3)
         imageData[dstId++] = (std::byte)255;
     }
     stbi_image_free(texData);
@@ -240,7 +242,7 @@ App::App()
       .name = "src_tex",
       .format = vk::Format::eR8G8B8A8Unorm,
       .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc |
-                    vk::ImageUsageFlagBits::eTransferDst,
+        vk::ImageUsageFlagBits::eTransferDst,
       .mipLevels = mipCnt});
 
     transferHelper->uploadImage(*oneShotCommands, sourceTexture, 0, 0, imageData);
@@ -283,7 +285,8 @@ App::~App()
 
 void App::run()
 {
-  while(!osWindow->isBeingClosed()) {
+  while (!osWindow->isBeingClosed())
+  {
     windowing.poll();
 
     params.iTime = static_cast<float>(windowing.getTime());
@@ -305,7 +308,8 @@ void App::drawFrame()
 
   auto nextSwapchainImage = vkWindow->acquireNext();
 
-  if(nextSwapchainImage) {
+  if (nextSwapchainImage)
+  {
     auto [backbuffer, backbufferView, backbufferAvailableSem, backbufferReadyForPresent] =
       *nextSwapchainImage;
 
@@ -335,8 +339,7 @@ void App::drawFrame()
           {set.getVkSet()},
           {});
         currentCmdBuf.bindPipeline(
-          vk::PipelineBindPoint::eGraphics,
-          proceduralPipeline.getVkPipeline());
+          vk::PipelineBindPoint::eGraphics, proceduralPipeline.getVkPipeline());
 
         currentCmdBuf.draw(3, 1, 0, 0);
       }
@@ -352,12 +355,12 @@ void App::drawFrame()
           currentCmdBuf,
           {etna::Binding{
              0,
-             proceduralImage
-               .genBinding(defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
+             proceduralImage.genBinding(
+               defaultSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
            etna::Binding{
              1,
-             sourceTexture
-               .genBinding(detailSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}});
+             sourceTexture.genBinding(
+               detailSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}});
 
         etna::RenderTargetState target{
           currentCmdBuf,
@@ -372,8 +375,7 @@ void App::drawFrame()
           {set.getVkSet(), imgSet.getVkSet()},
           {});
         currentCmdBuf.bindPipeline(
-          vk::PipelineBindPoint::eGraphics,
-          shadertoyPipeline.getVkPipeline());
+          vk::PipelineBindPoint::eGraphics, shadertoyPipeline.getVkPipeline());
 
         currentCmdBuf.draw(3, 1, 0, 0);
       }
@@ -437,13 +439,14 @@ void App::drawFrame()
 
     const bool presented = vkWindow->present(std::move(renderingDone), backbufferView);
 
-    if(!presented)
+    if (!presented)
       nextSwapchainImage = std::nullopt;
   }
 
   etna::end_frame();
 
-  if(!nextSwapchainImage && osWindow->getResolution() != glm::uvec2{0, 0}) {
+  if (!nextSwapchainImage && osWindow->getResolution() != glm::uvec2{0, 0})
+  {
     auto [w, h] = vkWindow->recreateSwapchain(etna::Window::DesiredProperties{
       .resolution = {resolution.x, resolution.y},
       .vsync = useVsync,
