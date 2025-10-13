@@ -2,11 +2,10 @@
 
 #include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
-#include <etna/RenderTargetStates.hpp>
 #include <etna/Profiling.hpp>
+#include <etna/RenderTargetStates.hpp>
 #include <glm/ext.hpp>
 #include <imgui.h>
-
 
 WorldRenderer::WorldRenderer()
   : sceneMgr{std::make_unique<SceneManager>()}
@@ -70,7 +69,6 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
       .byteStreamDescription = sceneMgr->getVertexFormatDescription(),
     }},
   };
-
 
   auto& pipelineManager = etna::get_context().getPipelineManager();
 

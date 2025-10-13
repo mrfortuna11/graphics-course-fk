@@ -4,7 +4,6 @@
 
 #include "gui/ImGuiRenderer.hpp"
 
-
 App::App()
 {
   glm::uvec2 initialRes = {1280, 720};
@@ -36,8 +35,9 @@ App::App()
   renderer->initFrameDelivery(
     std::move(surface), [window = mainWindow.get()]() { return window->getResolution(); });
 
-  // TODO: this is bad design, this initialization is dependent on the current ImGui context, but we
-  // pass it implicitly here instead of explicitly. Beware if trying to do something tricky.
+  // TODO: this is bad design, this initialization is dependent on the current
+  // ImGui context, but we pass it implicitly here instead of explicitly. Beware
+  // if trying to do something tricky.
   ImGuiRenderer::enableImGuiForWindow(mainWindow->native());
 
   shadowCam.lookAt({-8, 10, 8}, {0, 0, 0}, {0, 1, 0});

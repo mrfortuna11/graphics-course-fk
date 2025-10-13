@@ -1,12 +1,12 @@
 #pragma once
 
-#include <etna/Window.hpp>
-#include <etna/PerFrameCmdMgr.hpp>
 #include <etna/ComputePipeline.hpp>
 #include <etna/Image.hpp>
+#include <etna/PerFrameCmdMgr.hpp>
+#include <etna/Window.hpp>
+
 
 #include "wsi/OsWindowingManager.hpp"
-
 
 class App
 {

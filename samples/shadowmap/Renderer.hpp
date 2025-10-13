@@ -2,22 +2,22 @@
 
 #include <etna/GlobalContext.hpp>
 #include <etna/PerFrameCmdMgr.hpp>
-#include <glm/glm.hpp>
 #include <function2/function2.hpp>
+#include <glm/glm.hpp>
 
 #include "wsi/Keyboard.hpp"
 
 #include "FramePacket.hpp"
 #include "WorldRenderer.hpp"
 
-
 class ImGuiRenderer;
 
 using ResolutionProvider = fu2::unique_function<glm::uvec2() const>;
 
 /**
- * This class encapsulates things that are very unlikely to change from one sample to another.
- * E.g. initialization, frame delivery logic, window resizing, gui setup, etc.
+ * This class encapsulates things that are very unlikely to change from one
+ * sample to another. E.g. initialization, frame delivery logic, window
+ * resizing, gui setup, etc.
  */
 class Renderer
 {
@@ -34,7 +34,6 @@ public:
   void debugInput(const Keyboard& kb);
   void update(const FramePacket& packet);
   void drawFrame();
-
 
 private:
   ResolutionProvider resolutionProvider;

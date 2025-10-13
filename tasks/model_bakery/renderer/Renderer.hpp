@@ -2,14 +2,14 @@
 
 #include <etna/GlobalContext.hpp>
 #include <etna/PerFrameCmdMgr.hpp>
-#include <glm/glm.hpp>
 #include <function2/function2.hpp>
+#include <glm/glm.hpp>
+
 
 #include "wsi/Keyboard.hpp"
 
 #include "FramePacket.hpp"
 #include "WorldRenderer.hpp"
-
 
 using ResolutionProvider = fu2::unique_function<glm::uvec2() const>;
 
