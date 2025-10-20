@@ -177,7 +177,7 @@ float globalSdf(int object, vec3 pos)
 
 float trace(int object, vec3 start, vec3 ray, out vec3 position, out vec3 normal)
 {
-    int iterations = 99;
+    int iterations = 999;
     
     vec3 pos = start;
 

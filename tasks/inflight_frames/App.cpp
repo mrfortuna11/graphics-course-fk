@@ -5,19 +5,27 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <chrono>
+#include <thread>
 #include <etna/Assert.hpp>
 #include <etna/Etna.hpp>
 #include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
 #include <etna/RenderTargetStates.hpp>
+#include <etna/Profiling.hpp>
+#include <etna/GpuWorkCount.hpp>
 #include <glm/fwd.hpp>
 #include <stb_image.h>
+#include <tracy/Tracy.hpp>
 #include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_structs.hpp>
+
+using namespace std::chrono_literals;
 
 App::App()
   : resolution{1280, 720}
   , useVsync{true}
+  , GpuWorkCount(2)
 {
   {
     auto glfwInstExts = windowing.getRequiredVulkanInstanceExtensions();
@@ -31,7 +39,8 @@ App::App()
       .instanceExtensions = instanceExtensions,
       .deviceExtensions = deviceExtensions,
       .physicalDeviceIndexOverride = {},
-      .numFramesInFlight = 1});
+      .numFramesInFlight = (uint32_t)GpuWorkCount.multiBufferingCount()
+    });
   }
 
   osWindow = windowing.createWindow(OsWindow::CreateInfo{
@@ -258,14 +267,16 @@ App::App()
     .name = "detail_sampler",
     .maxLod = (float)detailMaxLod}};
 
-  uniformParams = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
-    .size = sizeof(UniformParams),
-    .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
-    .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
-    .name = "uniform_params",
+  uniformParams.emplace(GpuWorkCount, [&](size_t) {
+    return etna::get_context().createBuffer(etna::Buffer::CreateInfo{
+      .size = sizeof(UniformParams),
+      .bufferUsage = vk::BufferUsageFlagBits::eUniformBuffer,
+      .memoryUsage = VMA_MEMORY_USAGE_CPU_ONLY,
+      .name = "uniform_params",
+    });
   });
 
-  uniformParams.map();
+  uniformParams->iterate([](etna::Buffer& buf) { buf.map(); });
 
   auto& pipelineManager = etna::get_context().getPipelineManager();
   shadertoyPipeline = pipelineManager.createGraphicsPipeline(
@@ -289,12 +300,9 @@ void App::run()
   {
     windowing.poll();
 
-    params.iTime = static_cast<float>(windowing.getTime());
-    params.iResolution = resolution;
-    params.iMouse += osWindow->mouse.capturedPosDelta;
-    memcpy(uniformParams.data(), &params, sizeof(params));
-
+    std::this_thread::sleep_for(8ms);
     drawFrame();
+    FrameMark;
   }
 
   ETNA_CHECK_VK_RESULT(etna::get_context().getDevice().waitIdle());
@@ -302,6 +310,8 @@ void App::run()
 
 void App::drawFrame()
 {
+  ZoneScoped;
+  
   auto currentCmdBuf = commandManager->acquireNext();
 
   etna::begin_frame();
@@ -310,17 +320,26 @@ void App::drawFrame()
 
   if (nextSwapchainImage)
   {
+    {
+      params.iTime = static_cast<float>(windowing.getTime());
+      params.iResolution = resolution;
+      params.iMouse += osWindow->mouse.capturedPosDelta;
+      memcpy(uniformParams->get().data(), &params, sizeof(params));
+    }
+
     auto [backbuffer, backbufferView, backbufferAvailableSem, backbufferReadyForPresent] =
       *nextSwapchainImage;
 
     ETNA_CHECK_VK_RESULT(currentCmdBuf.begin(vk::CommandBufferBeginInfo{}));
     {
-      {
+      ETNA_PROFILE_GPU(currentCmdBuf, recordFrame);
+      {  
+        ETNA_PROFILE_GPU(currentCmdBuf, proc);
         auto procProgInfo = etna::get_shader_program("proc");
         auto set = etna::create_descriptor_set(
           procProgInfo.getDescriptorLayoutId(0),
           currentCmdBuf,
-          {etna::Binding{7, uniformParams.genBinding()}});
+          {etna::Binding{7, uniformParams->get().genBinding()}});
 
         etna::RenderTargetState target{
           currentCmdBuf,
@@ -345,11 +364,12 @@ void App::drawFrame()
       }
 
       {
+        ETNA_PROFILE_GPU(currentCmdBuf, toy);
         auto toyProgInfo = etna::get_shader_program("toy");
         auto set = etna::create_descriptor_set(
           toyProgInfo.getDescriptorLayoutId(0),
           currentCmdBuf,
-          {etna::Binding{7, uniformParams.genBinding()}});
+          {etna::Binding{7, uniformParams->get().genBinding()}});
         auto imgSet = etna::create_descriptor_set(
           toyProgInfo.getDescriptorLayoutId(1),
           currentCmdBuf,
@@ -421,6 +441,8 @@ void App::drawFrame()
           vk::Filter::eLinear);
       }
 
+
+
       etna::set_state(
         currentCmdBuf,
         backbuffer,
@@ -429,8 +451,12 @@ void App::drawFrame()
         vk::ImageLayout::ePresentSrcKHR,
         vk::ImageAspectFlagBits::eColor);
       etna::flush_barriers(currentCmdBuf);
+
+      ETNA_READ_BACK_GPU_PROFILING(currentCmdBuf);
     }
     ETNA_CHECK_VK_RESULT(currentCmdBuf.end());
+
+    GpuWorkCount.submit();
 
     auto renderingDone = commandManager->submit(
       std::move(currentCmdBuf),

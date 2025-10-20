@@ -10,6 +10,7 @@
 #include <etna/PerFrameCmdMgr.hpp>
 #include <etna/Sampler.hpp>
 #include <etna/Window.hpp>
+#include <etna/GpuWorkCount.hpp>
 #include <wsi/OsWindowingManager.hpp>
 
 class App
@@ -41,7 +42,8 @@ private:
   etna::Image mainImage, proceduralImage;
   etna::Image sourceTexture;
   etna::Sampler defaultSampler, detailSampler;
-  etna::Buffer uniformParams;
+  std::optional<etna::GpuSharedResource<etna::Buffer>> uniformParams;
+  etna::GpuWorkCount GpuWorkCount;
 
   UniformParams params{};
 };
