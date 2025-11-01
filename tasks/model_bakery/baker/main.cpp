@@ -16,38 +16,38 @@
 
 inline uint32_t best_fit_normal(glm::vec3& normal)
 {
-    normal = glm::normalize(normal); 
+  normal = glm::normalize(normal);
 
-    constexpr float LENGTH_STEP = 0.1f;
-    constexpr float LENGTH_BASE = 0.1f;
-    constexpr size_t STEPS_COUNT = 64;
+  constexpr float LENGTH_STEP = 0.1f;
+  constexpr float LENGTH_BASE = 0.1f;
+  constexpr size_t STEPS_COUNT = 64;
 
-    std::array<float, STEPS_COUNT> errors{};
-    std::fill(errors.begin(), errors.end(), 0.f);
+  std::array<float, STEPS_COUNT> errors{};
+  std::fill(errors.begin(), errors.end(), 0.f);
 
-    auto quantizeScaled = [&](size_t step_id) -> uint32_t {
-        float coeff = LENGTH_BASE + step_id * LENGTH_STEP;
-        glm::vec3 scaled = normal * coeff;
-        return quantize4fnorm(glm::vec4(scaled, 0.f));
-    };
+  auto quantizeScaled = [&](size_t step_id) -> uint32_t {
+    float coeff = LENGTH_BASE + step_id * LENGTH_STEP;
+    glm::vec3 scaled = normal * coeff;
+    return quantize4fnorm(glm::vec4(scaled, 0.f));
+  };
 
-    // Angle error calculation
-    std::for_each(errors.begin(), errors.end(), [&](float& out) {
-        size_t id = &out - errors.data();
-        glm::vec3 dequantized = dequantize3fnorm(quantizeScaled(id));
-      dequantized = glm::normalize(dequantized);
-      out = glm::angle(normal, dequantized);
-    });
+  // Angle error calculation
+  std::for_each(errors.begin(), errors.end(), [&](float& out) {
+    size_t id = &out - errors.data();
+    glm::vec3 dequantized = dequantize3fnorm(quantizeScaled(id));
+    dequantized = glm::normalize(dequantized);
+    out = glm::angle(normal, dequantized);
+  });
 
-    // Step with minimal error
-    auto it = std::min_element(errors.begin(), errors.end());
-    size_t bestStep = std::distance(errors.begin(), it);
+  // Step with minimal error
+  auto it = std::min_element(errors.begin(), errors.end());
+  size_t bestStep = std::distance(errors.begin(), it);
 
-  
-    glm::vec3 finalDeq = dequantize3fnorm(quantizeScaled(bestStep));
-    finalDeq = glm::normalize(finalDeq);
 
-    return quantize4fnorm(glm::vec4(finalDeq, 0.f));
+  glm::vec3 finalDeq = dequantize3fnorm(quantizeScaled(bestStep));
+  finalDeq = glm::normalize(finalDeq);
+
+  return quantize4fnorm(glm::vec4(finalDeq, 0.f));
 }
 
 inline void check(bool condition, const std::string& message)
@@ -222,8 +222,8 @@ int main(int argc, char** argv)
           if (hasTex)
             std::memcpy(&vtx.texcoord, ptrs[4], sizeof(vtx.texcoord));
 
-          vtx.norm = bestFitNormal ? best_fit_normal(normal)
-                                   : quantize4fnorm(glm::vec4{normal, 0.f});
+          vtx.norm =
+            bestFitNormal ? best_fit_normal(normal) : quantize4fnorm(glm::vec4{normal, 0.f});
           vtx.tang = quantize4fnorm(tangent);
 
           ptrs[1] += strides[1];

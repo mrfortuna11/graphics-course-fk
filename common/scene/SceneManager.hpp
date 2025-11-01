@@ -85,8 +85,7 @@ private:
   template <bool Baked>
   struct ProcessedMeshes
   {
-    using VertexDataCont =
-      std::conditional_t<Baked, std::span<Vertex>, std::vector<Vertex>>;
+    using VertexDataCont = std::conditional_t<Baked, std::span<Vertex>, std::vector<Vertex>>;
     using IndexDataCont =
       std::conditional_t<Baked, std::span<std::uint32_t>, std::vector<std::uint32_t>>;
 
