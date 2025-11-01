@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 
 #include <glm/glm.hpp>
@@ -32,9 +33,17 @@ struct Mesh
 class SceneManager
 {
 public:
+  enum class SceneAssetType
+  {
+    NOT_LOADED,
+    GENERIC,
+    BAKED,
+  };
+
   SceneManager();
 
-  void selectScene(std::filesystem::path path);
+  void selectScene(
+    std::filesystem::path path, SceneAssetType scene_type = SceneManager::SceneAssetType::GENERIC);
 
   // Every instance is a mesh drawn with a certain transform
   // NOTE: maybe you can pass some additional data through unused matrix entries?
@@ -73,20 +82,32 @@ private:
 
   static_assert(sizeof(Vertex) == sizeof(float) * 8);
 
+  template <bool Baked>
   struct ProcessedMeshes
   {
-    std::vector<Vertex> vertices;
-    std::vector<std::uint32_t> indices;
+    using VertexDataCont =
+      std::conditional_t<Baked, std::span<Vertex>, std::vector<Vertex>>;
+    using IndexDataCont =
+      std::conditional_t<Baked, std::span<std::uint32_t>, std::vector<std::uint32_t>>;
+
+    VertexDataCont vertices;
+    IndexDataCont indices;
     std::vector<RenderElement> relems;
     std::vector<Mesh> meshes;
   };
-  ProcessedMeshes processMeshes(const tinygltf::Model& model) const;
-  void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t>);
+
+  ProcessedMeshes<false> processMeshes(const tinygltf::Model& model) const;
+  ProcessedMeshes<true> bakedMeshes(const tinygltf::Model& model) const;
+
+  template <class VertexType>
+  void uploadData(std::span<const VertexType> vertices, std::span<const std::uint32_t>);
 
 private:
   tinygltf::TinyGLTF loader;
   std::unique_ptr<etna::OneShotCmdMgr> oneShotCommands;
   etna::BlockingTransferHelper transferHelper;
+
+  SceneAssetType selectedSceneType = SceneManager::SceneAssetType::NOT_LOADED;
 
   std::vector<RenderElement> renderElements;
   std::vector<Mesh> meshes;
