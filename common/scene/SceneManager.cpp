@@ -81,12 +81,11 @@ SceneManager::ProcessedInstances SceneManager::processInstances(const tinygltf::
             static_cast<float>(node.scale[2])));
 
       if (!node.rotation.empty())
-        transform *= mat4_cast(
-          glm::quat(
-            static_cast<float>(node.rotation[3]),
-            static_cast<float>(node.rotation[0]),
-            static_cast<float>(node.rotation[1]),
-            static_cast<float>(node.rotation[2])));
+        transform *= mat4_cast(glm::quat(
+          static_cast<float>(node.rotation[3]),
+          static_cast<float>(node.rotation[0]),
+          static_cast<float>(node.rotation[1]),
+          static_cast<float>(node.rotation[2])));
 
       if (!node.translation.empty())
         transform = translate(
@@ -191,11 +190,10 @@ SceneManager::ProcessedMeshes<false> SceneManager::processMeshes(const tinygltf:
 
   for (const auto& mesh : model.meshes)
   {
-    result.meshes.push_back(
-      Mesh{
-        .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
-        .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
-      });
+    result.meshes.push_back(Mesh{
+      .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
+      .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
+    });
 
     for (const auto& prim : mesh.primitives)
     {
@@ -238,12 +236,11 @@ SceneManager::ProcessedMeshes<false> SceneManager::processMeshes(const tinygltf:
         hasTexcoord ? &model.bufferViews[accessors[4]->bufferView] : nullptr,
       };
 
-      result.relems.push_back(
-        RenderElement{
-          .vertexOffset = static_cast<std::uint32_t>(result.vertices.size()),
-          .indexOffset = static_cast<std::uint32_t>(result.indices.size()),
-          .indexCount = static_cast<std::uint32_t>(accessors[0]->count),
-        });
+      result.relems.push_back(RenderElement{
+        .vertexOffset = static_cast<std::uint32_t>(result.vertices.size()),
+        .indexOffset = static_cast<std::uint32_t>(result.indices.size()),
+        .indexCount = static_cast<std::uint32_t>(accessors[0]->count),
+      });
 
       const std::size_t vertexCount = accessors[1]->count;
 
@@ -370,11 +367,10 @@ SceneManager::ProcessedMeshes<true> SceneManager::bakedMeshes(const tinygltf::Mo
 
   for (const auto& mesh : model.meshes)
   {
-    result.meshes.push_back(
-      Mesh{
-        .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
-        .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
-      });
+    result.meshes.push_back(Mesh{
+      .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
+      .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
+    });
 
     for (const auto& prim : mesh.primitives)
     {
@@ -388,12 +384,11 @@ SceneManager::ProcessedMeshes<true> SceneManager::bakedMeshes(const tinygltf::Mo
       const tinygltf::Accessor& indAccessor = model.accessors[prim.indices];
       const tinygltf::Accessor& posAccessor = model.accessors[prim.attributes.at("POSITION")];
 
-      result.relems.push_back(
-        RenderElement{
-          .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
-          .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(std::uint32_t)),
-          .indexCount = static_cast<std::uint32_t>(indAccessor.count),
-        });
+      result.relems.push_back(RenderElement{
+        .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
+        .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(std::uint32_t)),
+        .indexCount = static_cast<std::uint32_t>(indAccessor.count),
+      });
     }
   }
 
@@ -410,21 +405,19 @@ template <class VertexType>
 void SceneManager::uploadData(
   std::span<const VertexType> vertices, std::span<const std::uint32_t> indices)
 {
-  unifiedVbuf = etna::get_context().createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = vertices.size_bytes(),
-      .bufferUsage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
-      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-      .name = "unifiedVbuf",
-    });
+  unifiedVbuf = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
+    .size = vertices.size_bytes(),
+    .bufferUsage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
+    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+    .name = "unifiedVbuf",
+  });
 
-  unifiedIbuf = etna::get_context().createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = indices.size_bytes(),
-      .bufferUsage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-      .name = "unifiedIbuf",
-    });
+  unifiedIbuf = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
+    .size = indices.size_bytes(),
+    .bufferUsage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
+    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+    .name = "unifiedIbuf",
+  });
 
   transferHelper.uploadBuffer<VertexType>(*oneShotCommands, unifiedVbuf, 0, vertices);
   transferHelper.uploadBuffer<std::uint32_t>(*oneShotCommands, unifiedIbuf, 0, indices);
