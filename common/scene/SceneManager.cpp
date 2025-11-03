@@ -1,7 +1,5 @@
 #include "SceneManager.hpp"
-#include "etna/Assert.hpp"
 
-#include <filesystem>
 #include <stack>
 
 #include <spdlog/spdlog.h>
@@ -147,14 +145,14 @@ static std::uint32_t encode_normal(glm::vec3 normal)
   return sx | sy;
 }
 
-SceneManager::ProcessedMeshes<false> SceneManager::processMeshes(const tinygltf::Model& model) const
+SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model& model) const
 {
   // NOTE: glTF assets can have pretty wonky data layouts which are not appropriate
   // for real-time rendering, so we have to press the data first. In serious engines
   // this is mitigated by storing assets on the disc in an engine-specific format that
   // is appropriate for GPU upload right after reading from disc.
 
-  ProcessedMeshes<false> result;
+  ProcessedMeshes result;
 
   // Pre-allocate enough memory so as not to hit the
   // allocator on the memcpy hotpath
@@ -352,15 +350,16 @@ SceneManager::ProcessedMeshes<false> SceneManager::processMeshes(const tinygltf:
   return result;
 }
 
-SceneManager::ProcessedMeshes<true> SceneManager::bakedMeshes(const tinygltf::Model& model) const
+SceneManager::ProcessedMeshes SceneManager::bakeMeshes(const tinygltf::Model& model) const
 {
-  ProcessedMeshes<true> result;
+  ProcessedMeshes result;
 
   {
     std::size_t totalPrimitives = 0;
     for (const auto& mesh : model.meshes)
       totalPrimitives += mesh.primitives.size();
     result.relems.reserve(totalPrimitives);
+    result.bounds.reserve(totalPrimitives);
   }
 
   result.meshes.reserve(model.meshes.size());
@@ -374,36 +373,57 @@ SceneManager::ProcessedMeshes<true> SceneManager::bakedMeshes(const tinygltf::Mo
 
     for (const auto& prim : mesh.primitives)
     {
-      if (prim.mode != TINYGLTF_MODE_TRIANGLES)
-      {
-        spdlog::warn("Not triangles primitive!");
-        --result.meshes.back().relemCount;
-        continue;
-      }
 
-      const tinygltf::Accessor& indAccessor = model.accessors[prim.indices];
-      const tinygltf::Accessor& posAccessor = model.accessors[prim.attributes.at("POSITION")];
+      std::array accessors{
+        &model.accessors[prim.indices],
+        &model.accessors[prim.attributes.at("POSITION")],
+      };
 
       result.relems.push_back(RenderElement{
-        .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
-        .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(std::uint32_t)),
-        .indexCount = static_cast<std::uint32_t>(indAccessor.count),
+        .vertexOffset = static_cast<std::uint32_t>(accessors[1]->byteOffset / sizeof(Vertex)),
+        .indexOffset = static_cast<std::uint32_t>(accessors[0]->byteOffset / sizeof(uint32_t)),
+        .indexCount = static_cast<std::uint32_t>(accessors[0]->count),
       });
+
+      const std::size_t vertexCount = accessors[1]->count;
+      auto& bufView = model.bufferViews[accessors[1]->bufferView];
+      auto ptr = reinterpret_cast<const std::byte*>(model.buffers[bufView.buffer].data.data()) +
+          bufView.byteOffset + accessors[1]->byteOffset;
+      auto stride = bufView.byteStride != 0
+          ? bufView.byteStride
+          : tinygltf::GetComponentSizeInBytes(accessors[1]->componentType) *
+            tinygltf::GetNumComponentsInType(accessors[1]->type);
+
+      glm::vec3 minBnd(std::numeric_limits<float>::max());
+      glm::vec3 maxBnd(std::numeric_limits<float>::min());
+
+      for (std::size_t i = 0; i < vertexCount; ++i)
+      {
+        glm::vec3 pos;
+        std::memcpy(&pos, ptr, sizeof(pos));
+        minBnd.x = std::min(minBnd.x, pos.x);
+        minBnd.y = std::min(minBnd.y, pos.y);
+        minBnd.z = std::min(minBnd.z, pos.z);
+        maxBnd.x = std::max(maxBnd.x, pos.x);
+        maxBnd.y = std::max(maxBnd.y, pos.y);
+        maxBnd.z = std::max(maxBnd.z, pos.z);
+        ptr += stride;
+      }
+      result.bounds.emplace_back(minBnd, maxBnd);
     }
   }
 
-  result.vertices = {
-    (Vertex*)model.buffers[0].data.data(), model.bufferViews[0].byteLength / sizeof(Vertex)};
-  result.indices = {
-    (std::uint32_t*)(result.vertices.data() + result.vertices.size()),
-    model.bufferViews[1].byteLength / sizeof(std::uint32_t)};
+  auto data = model.buffers[0].data.data();
+  auto indices_pointer = reinterpret_cast<const uint32_t*>(data);
+  auto vertices_pointer = reinterpret_cast<const Vertex*>(data + model.bufferViews[0].byteLength);
+  result.indices = std::vector(indices_pointer, indices_pointer + model.bufferViews[0].byteLength / sizeof(uint32_t));
+  result.vertices = std::vector(vertices_pointer, vertices_pointer + model.bufferViews[1].byteLength / sizeof(Vertex));
 
   return result;
 }
 
-template <class VertexType>
 void SceneManager::uploadData(
-  std::span<const VertexType> vertices, std::span<const std::uint32_t> indices)
+  std::span<const Vertex> vertices, std::span<const std::uint32_t> indices)
 {
   unifiedVbuf = etna::get_context().createBuffer(etna::Buffer::CreateInfo{
     .size = vertices.size_bytes(),
@@ -419,19 +439,15 @@ void SceneManager::uploadData(
     .name = "unifiedIbuf",
   });
 
-  transferHelper.uploadBuffer<VertexType>(*oneShotCommands, unifiedVbuf, 0, vertices);
+  transferHelper.uploadBuffer<Vertex>(*oneShotCommands, unifiedVbuf, 0, vertices);
   transferHelper.uploadBuffer<std::uint32_t>(*oneShotCommands, unifiedIbuf, 0, indices);
 }
 
-void SceneManager::selectScene(std::filesystem::path path, SceneAssetType scene_type)
+void SceneManager::selectScene(std::filesystem::path path)
 {
   auto maybeModel = loadModel(path);
   if (!maybeModel.has_value())
     return;
-
-  ETNA_ASSERT(scene_type != SceneAssetType::NOT_LOADED);
-  ETNA_ASSERT(selectedSceneType == SceneAssetType::NOT_LOADED || selectedSceneType == scene_type);
-  selectedSceneType = scene_type;
 
   auto model = std::move(*maybeModel);
 
@@ -444,25 +460,34 @@ void SceneManager::selectScene(std::filesystem::path path, SceneAssetType scene_
   instanceMatrices = std::move(instMats);
   instanceMeshes = std::move(instMeshes);
 
-  switch (scene_type)
-  {
-  case SceneAssetType::GENERIC: {
-    auto [verts, inds, relems, meshs] = processMeshes(model);
-    renderElements = std::move(relems);
-    meshes = std::move(meshs);
-    uploadData<Vertex>(verts, inds);
-  }
-  break;
-  case SceneAssetType::BAKED: {
-    auto [verts, inds, relems, meshs] = bakedMeshes(model);
-    renderElements = std::move(relems);
-    meshes = std::move(meshs);
-    uploadData<Vertex>(verts, inds);
-  }
-  break;
-  default:
-    ETNA_PANIC("blank");
-  }
+  auto [verts, inds, relems, meshs, bnds] = processMeshes(model);
+
+  renderElements = std::move(relems);
+  meshes = std::move(meshs);
+  bounds = std::move(bnds);
+
+  uploadData(verts, inds);
+}
+
+void SceneManager::selectBakerScene(std::filesystem::path path)
+{
+  auto maybeModel = loadModel(path);
+  if (!maybeModel.has_value())
+    return;
+
+  auto model = std::move(*maybeModel);
+
+  auto [instMats, instMeshes] = processInstances(model);
+  instanceMatrices = std::move(instMats);
+  instanceMeshes = std::move(instMeshes);
+
+  auto [verts, inds, relems, meshs, bnds] = bakeMeshes(model);
+
+  renderElements = std::move(relems);
+  meshes = std::move(meshs);
+  bounds = std::move(bnds);
+
+  uploadData(verts, inds);
 }
 
 etna::VertexByteStreamFormatDescription SceneManager::getVertexFormatDescription()
@@ -477,5 +502,6 @@ etna::VertexByteStreamFormatDescription SceneManager::getVertexFormatDescription
       etna::VertexByteStreamFormatDescription::Attribute{
         .format = vk::Format::eR32G32B32A32Sfloat,
         .offset = sizeof(glm::vec4),
-      }}};
+      },
+    }};
 }

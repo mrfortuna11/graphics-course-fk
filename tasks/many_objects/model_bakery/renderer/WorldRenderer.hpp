@@ -32,7 +32,7 @@ public:
 private:
   void renderScene(
     vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout);
-
+  bool frustumCulled(const std::pair<glm::vec3, glm::vec3> bound, const glm::mat4x4 globalTransform);
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
@@ -43,11 +43,13 @@ private:
   struct PushConstants
   {
     glm::mat4x4 projView;
-    glm::mat4x4 model;
   } pushConst2M;
 
   glm::mat4x4 worldViewProj;
   glm::mat4x4 lightMatrix;
+  std::optional<etna::GpuSharedResource<etna::Buffer>> mModels = std::nullopt;
+  std::vector<uint32_t> mModelsCount;
+  std::size_t maxDrawnInstances;
 
   etna::GraphicsPipeline staticMeshPipeline{};
 

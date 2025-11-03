@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <filesystem>
 
 #include <glm/glm.hpp>
@@ -10,8 +9,6 @@
 #include <etna/VertexInput.hpp>
 
 
-// A single render element (relem) corresponds to a single draw call
-// of a certain pipeline with specific bindings (including material data)
 struct RenderElement
 {
   std::uint32_t vertexOffset;
@@ -19,6 +16,7 @@ struct RenderElement
   std::uint32_t indexCount;
   // Not implemented!
   // Material* material;
+  auto operator<=>(const RenderElement& other) const = default;
 };
 
 // A mesh is a collection of relems. A scene may have the same mesh
@@ -33,17 +31,10 @@ struct Mesh
 class SceneManager
 {
 public:
-  enum class SceneAssetType
-  {
-    NOT_LOADED,
-    GENERIC,
-    BAKED,
-  };
-
   SceneManager();
 
-  void selectScene(
-    std::filesystem::path path, SceneAssetType scene_type = SceneManager::SceneAssetType::GENERIC);
+  void selectScene(std::filesystem::path path);
+  void selectBakerScene(std::filesystem::path path);
 
   // Every instance is a mesh drawn with a certain transform
   // NOTE: maybe you can pass some additional data through unused matrix entries?
@@ -55,6 +46,8 @@ public:
 
   // Every relem is a single draw call
   std::span<const RenderElement> getRenderElements() { return renderElements; }
+
+  std::span<const std::pair<glm::vec3, glm::vec3>> getBounds() { return bounds; }
 
   vk::Buffer getVertexBuffer() { return unifiedVbuf.get(); }
   vk::Buffer getIndexBuffer() { return unifiedIbuf.get(); }
@@ -82,34 +75,26 @@ private:
 
   static_assert(sizeof(Vertex) == sizeof(float) * 8);
 
-  template <bool Baked>
   struct ProcessedMeshes
   {
-    using VertexDataCont = std::conditional_t<Baked, std::span<Vertex>, std::vector<Vertex>>;
-    using IndexDataCont =
-      std::conditional_t<Baked, std::span<std::uint32_t>, std::vector<std::uint32_t>>;
-
-    VertexDataCont vertices;
-    IndexDataCont indices;
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
     std::vector<RenderElement> relems;
     std::vector<Mesh> meshes;
+    std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
   };
-
-  ProcessedMeshes<false> processMeshes(const tinygltf::Model& model) const;
-  ProcessedMeshes<true> bakedMeshes(const tinygltf::Model& model) const;
-
-  template <class VertexType>
-  void uploadData(std::span<const VertexType> vertices, std::span<const std::uint32_t>);
+  ProcessedMeshes processMeshes(const tinygltf::Model& model) const;
+  ProcessedMeshes bakeMeshes(const tinygltf::Model& model) const;
+  void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t>);
 
 private:
   tinygltf::TinyGLTF loader;
   std::unique_ptr<etna::OneShotCmdMgr> oneShotCommands;
   etna::BlockingTransferHelper transferHelper;
 
-  SceneAssetType selectedSceneType = SceneManager::SceneAssetType::NOT_LOADED;
-
   std::vector<RenderElement> renderElements;
   std::vector<Mesh> meshes;
+  std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
   std::vector<glm::mat4x4> instanceMatrices;
   std::vector<std::uint32_t> instanceMeshes;
 
