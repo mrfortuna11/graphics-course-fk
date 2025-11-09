@@ -7,7 +7,7 @@ add_executable(model_bakery_renderer
 )
 
 target_link_libraries(model_bakery_renderer
-  PRIVATE glfw etna glm::glm wsi gui scene render_utils)
+  PRIVATE glfw etna glm::glm wsi gui scene render_utils common_code)
 
 target_add_shaders(model_bakery_renderer
   shaders/static_mesh.frag

@@ -9,8 +9,6 @@
 #include <etna/VertexInput.hpp>
 
 
-// A single render element (relem) corresponds to a single draw call
-// of a certain pipeline with specific bindings (including material data)
 struct RenderElement
 {
   std::uint32_t vertexOffset;
@@ -18,6 +16,7 @@ struct RenderElement
   std::uint32_t indexCount;
   // Not implemented!
   // Material* material;
+  auto operator<=>(const RenderElement& other) const = default;
 };
 
 // A mesh is a collection of relems. A scene may have the same mesh
@@ -35,6 +34,7 @@ public:
   SceneManager();
 
   void selectScene(std::filesystem::path path);
+  void selectBakerScene(std::filesystem::path path);
 
   // Every instance is a mesh drawn with a certain transform
   // NOTE: maybe you can pass some additional data through unused matrix entries?
@@ -46,6 +46,8 @@ public:
 
   // Every relem is a single draw call
   std::span<const RenderElement> getRenderElements() { return renderElements; }
+
+  std::span<const std::pair<glm::vec3, glm::vec3>> getBounds() { return bounds; }
 
   vk::Buffer getVertexBuffer() { return unifiedVbuf.get(); }
   vk::Buffer getIndexBuffer() { return unifiedIbuf.get(); }
@@ -79,8 +81,10 @@ private:
     std::vector<std::uint32_t> indices;
     std::vector<RenderElement> relems;
     std::vector<Mesh> meshes;
+    std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
   };
   ProcessedMeshes processMeshes(const tinygltf::Model& model) const;
+  ProcessedMeshes bakeMeshes(const tinygltf::Model& model) const;
   void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t>);
 
 private:
@@ -90,6 +94,7 @@ private:
 
   std::vector<RenderElement> renderElements;
   std::vector<Mesh> meshes;
+  std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
   std::vector<glm::mat4x4> instanceMatrices;
   std::vector<std::uint32_t> instanceMeshes;
 
