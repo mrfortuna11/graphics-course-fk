@@ -1,10 +1,10 @@
 #pragma once
 
-#include "wsi/OsWindowingManager.hpp"
 #include "scene/Camera.hpp"
+#include "wsi/OsWindowingManager.hpp"
+
 
 #include "Renderer.hpp"
-
 
 class App
 {

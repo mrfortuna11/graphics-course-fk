@@ -1,10 +1,9 @@
 #pragma once
 
-#include "wsi/OsWindowingManager.hpp"
 #include "scene/Camera.hpp"
+#include "wsi/OsWindowingManager.hpp"
 
 #include "Renderer.hpp"
-
 
 /**
  * Main class of the application. Contains things that are not strictly

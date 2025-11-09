@@ -2,7 +2,6 @@
 
 #include <tracy/Tracy.hpp>
 
-
 App::App()
 {
   glm::uvec2 initialRes = {1280, 720};

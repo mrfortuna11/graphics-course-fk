@@ -3,11 +3,10 @@
 
 #include <memory>
 
-#include <etna/GlobalContext.hpp>
-#include <etna/ComputePipeline.hpp>
-#include <etna/OneShotCmdMgr.hpp>
 #include <etna/BlockingTransferHelper.hpp>
-
+#include <etna/ComputePipeline.hpp>
+#include <etna/GlobalContext.hpp>
+#include <etna/OneShotCmdMgr.hpp>
 
 class SimpleCompute
 {
@@ -36,6 +35,5 @@ private:
   void buildCommandBuffer(vk::CommandBuffer cmd_buf);
   void readback();
 };
-
 
 #endif // SIMPLE_COMPUTE_H

@@ -2,7 +2,6 @@
 
 #include <etna/Etna.hpp>
 
-
 void SimpleCompute::init()
 {
   etna::initialize(etna::InitParams{

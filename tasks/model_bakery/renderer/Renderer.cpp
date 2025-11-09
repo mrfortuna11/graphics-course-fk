@@ -1,11 +1,10 @@
 #include "Renderer.hpp"
 
-#include <etna/GlobalContext.hpp>
 #include <etna/Etna.hpp>
-#include <etna/RenderTargetStates.hpp>
+#include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
 #include <etna/Profiling.hpp>
-
+#include <etna/RenderTargetStates.hpp>
 
 Renderer::Renderer(glm::uvec2 res)
   : resolution{res}

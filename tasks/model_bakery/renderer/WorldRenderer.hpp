@@ -1,16 +1,16 @@
 #pragma once
 
-#include <etna/Image.hpp>
-#include <etna/Sampler.hpp>
 #include <etna/Buffer.hpp>
 #include <etna/GraphicsPipeline.hpp>
+#include <etna/Image.hpp>
+#include <etna/Sampler.hpp>
 #include <glm/glm.hpp>
+
 
 #include "scene/SceneManager.hpp"
 #include "wsi/Keyboard.hpp"
 
 #include "FramePacket.hpp"
-
 
 class WorldRenderer
 {
@@ -32,7 +32,6 @@ public:
 private:
   void renderScene(
     vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout);
-
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;

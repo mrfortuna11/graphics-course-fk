@@ -1,14 +1,13 @@
 #include "Renderer.hpp"
 
-#include <etna/GlobalContext.hpp>
 #include <etna/Etna.hpp>
-#include <etna/RenderTargetStates.hpp>
+#include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
 #include <etna/Profiling.hpp>
+#include <etna/RenderTargetStates.hpp>
 #include <imgui.h>
 
 #include <gui/ImGuiRenderer.hpp>
-
 
 Renderer::Renderer(glm::uvec2 res)
   : resolution{res}
@@ -34,7 +33,8 @@ void Renderer::initVulkan(std::span<const char*> instance_extensions)
     .features = vk::PhysicalDeviceFeatures2{.features = {}},
     // Replace with an index if etna detects your preferred GPU incorrectly
     .physicalDeviceIndexOverride = {},
-    // How much frames we buffer on the GPU without waiting for their completion on the CPU
+    // How much frames we buffer on the GPU without waiting for their
+    // completion on the CPU
     .numFramesInFlight = 2,
   });
 }
