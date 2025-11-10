@@ -20,6 +20,12 @@ struct RenderElement
   // Material* material;
 };
 
+struct BoundingBox
+{
+  std::array<float, 3> maxCoord;
+  std::array<float, 3> minCoord;
+};
+
 // A mesh is a collection of relems. A scene may have the same mesh
 // located in several different places, so a scene consists of **instances**,
 // not meshes.
@@ -27,6 +33,8 @@ struct Mesh
 {
   std::uint32_t firstRelem;
   std::uint32_t relemCount;
+
+  BoundingBox box;
 };
 
 class SceneManager
@@ -35,6 +43,7 @@ public:
   SceneManager();
 
   void selectScene(std::filesystem::path path);
+  void selectScenePrebaked(std::filesystem::path path);
 
   // Every instance is a mesh drawn with a certain transform
   // NOTE: maybe you can pass some additional data through unused matrix entries?
@@ -80,8 +89,17 @@ private:
     std::vector<RenderElement> relems;
     std::vector<Mesh> meshes;
   };
+
+  struct ProcessedMeshesBaked
+  {
+    std::span<const Vertex> vertices;
+    std::span<const std::uint32_t> indices;
+    std::vector<RenderElement> relems;
+    std::vector<Mesh> meshes;
+  };
   ProcessedMeshes processMeshes(const tinygltf::Model& model) const;
-  void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t>);
+  void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
+  ProcessedMeshesBaked processMeshesBaked(const tinygltf::Model& model) const;
 
 private:
   tinygltf::TinyGLTF loader;
