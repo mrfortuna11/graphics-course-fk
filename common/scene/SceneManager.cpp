@@ -1,5 +1,6 @@
 #include "SceneManager.hpp"
 
+#include <limits>
 #include <stack>
 
 #include <spdlog/spdlog.h>
@@ -113,21 +114,32 @@ SceneManager::ProcessedInstances SceneManager::processInstances(const tinygltf::
 
   ProcessedInstances result;
 
+  std::vector<std::size_t> meshBucketCounts(model.meshes.size());
+
   // Don't overallocate matrices, they are pretty chonky.
   {
     std::size_t totalNodesWithMeshes = 0;
     for (std::size_t i = 0; i < model.nodes.size(); ++i)
       if (model.nodes[i].mesh >= 0)
+      {
         ++totalNodesWithMeshes;
-    result.matrices.reserve(totalNodesWithMeshes);
-    result.meshes.reserve(totalNodesWithMeshes);
+        ++meshBucketCounts[model.nodes[i].mesh];
+      }
+    result.matrices.resize(totalNodesWithMeshes);
+    result.meshes.resize(totalNodesWithMeshes);
+  }
+
+  for (size_t i = 1; i < meshBucketCounts.size(); ++i)
+  {
+    meshBucketCounts[i] += meshBucketCounts[i - 1];
   }
 
   for (std::size_t i = 0; i < model.nodes.size(); ++i)
     if (model.nodes[i].mesh >= 0)
     {
-      result.matrices.push_back(nodeTransforms[i]);
-      result.meshes.push_back(model.nodes[i].mesh);
+      std::size_t index = --meshBucketCounts[model.nodes[i].mesh];
+      result.matrices[index] = nodeTransforms[i];
+      result.meshes[index] = model.nodes[i].mesh;
     }
 
   return result;
@@ -191,7 +203,7 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
     result.meshes.push_back(Mesh{
       .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
       .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
-    });
+      .box = {}});
 
     for (const auto& prim : mesh.primitives)
     {
@@ -371,6 +383,69 @@ void SceneManager::uploadData(
   transferHelper.uploadBuffer<std::uint32_t>(*oneShotCommands, unifiedIbuf, 0, indices);
 }
 
+
+SceneManager::ProcessedMeshesBaked SceneManager::processMeshesBaked(
+  const tinygltf::Model& model) const
+{
+
+  ProcessedMeshesBaked result;
+
+  {
+    std::size_t totalPrimitives = 0;
+    for (const auto& mesh : model.meshes)
+      totalPrimitives += mesh.primitives.size();
+    result.relems.reserve(totalPrimitives);
+  }
+
+  result.meshes.reserve(model.meshes.size());
+
+  for (const auto& mesh : model.meshes)
+  {
+    {
+      float min = std::numeric_limits<float>::lowest();
+      float max = std::numeric_limits<float>::max();
+      result.meshes.push_back(Mesh{
+        .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
+        .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
+        .box = {{min, min, min}, {max, max, max}}});
+    }
+
+    for (const auto& prim : mesh.primitives)
+    {
+      auto& indAccessor = model.accessors[prim.indices];
+      auto& posAccessor = model.accessors[prim.attributes.at("POSITION")];
+
+      {
+        auto& resBox = result.meshes.back().box;
+        auto& currMax = posAccessor.maxValues;
+        auto& currMin = posAccessor.minValues;
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+          resBox.maxCoord[i] = std::max(resBox.maxCoord[i], static_cast<float>(currMax[i]));
+          resBox.minCoord[i] = std::min(resBox.minCoord[i], static_cast<float>(currMin[i]));
+        }
+      }
+
+      result.relems.push_back(RenderElement{
+        .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
+        .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(uint32_t)),
+        .indexCount = static_cast<std::uint32_t>(indAccessor.count),
+      });
+    }
+  }
+
+  {
+    auto ptr = model.buffers[0].data.data();
+    auto vertexCount = model.bufferViews[0].byteLength / sizeof(Vertex);
+    auto indexCount = model.bufferViews[1].byteLength / sizeof(uint32_t);
+    result.indices = {
+      reinterpret_cast<const uint32_t*>(ptr + vertexCount * sizeof(Vertex)), indexCount};
+    result.vertices = {reinterpret_cast<const Vertex*>(ptr), vertexCount};
+  }
+
+  return result;
+}
+
 void SceneManager::selectScene(std::filesystem::path path)
 {
   auto maybeModel = loadModel(path);
@@ -410,4 +485,25 @@ etna::VertexByteStreamFormatDescription SceneManager::getVertexFormatDescription
         .offset = sizeof(glm::vec4),
       },
     }};
+}
+
+void SceneManager::selectScenePrebaked(std::filesystem::path path)
+{
+  auto maybeModel = loadModel(path);
+  if (!maybeModel.has_value())
+    return;
+
+  auto model = std::move(*maybeModel);
+
+  // NOTE: you might want to store these on the GPU for GPU-driven rendering.
+  auto [instMats, instMeshes] = processInstances(model);
+  instanceMatrices = std::move(instMats);
+  instanceMeshes = std::move(instMeshes);
+
+  auto [verts, inds, relems, meshs] = processMeshesBaked(model);
+
+  renderElements = std::move(relems);
+  meshes = std::move(meshs);
+
+  uploadData(verts, inds);
 }
