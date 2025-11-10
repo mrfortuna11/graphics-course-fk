@@ -1,7 +1,7 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-layout(quads, equal_spacing, cw) in;
+layout(quads, fractional_even_spacing, cw) in;
 
 layout(binding = 0) uniform sampler2D perlinNoise;
 layout(push_constant) uniform params_t
@@ -19,8 +19,6 @@ layout(location = 2) in float GridSize[];
 layout(location = 0) out VS_OUT
 {
   vec3 wPos;
-  vec3 wNorm;
-  vec3 wTangent;
   vec2 texCoord;
 };
 
@@ -46,7 +44,5 @@ void main()
   wPos.xz = mix(WorldPos_ES_in[0].xz, WorldPos_ES_in[1].xz, gl_TessCoord.xy);
   texCoord = mix(TexCoord_ES_in[0], TexCoord_ES_in[1], gl_TessCoord.xy);
   wPos.y += texture(perlinNoise, texCoord).x * zScale;
-  wTangent = vec3(0, 0, 1);
-  wNorm = calcNorm(texCoord);
   gl_Position = mProjView * vec4(wPos, 1.0);
 }

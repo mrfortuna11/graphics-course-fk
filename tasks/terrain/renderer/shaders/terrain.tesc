@@ -9,7 +9,7 @@ layout(push_constant) uniform params_t
 };
 
 
-const vec3 startPos = vec3(-512, -100, -1024);
+const vec3 startPos = vec3(-512, -100, -512);
 const uint squareSize = 32;
 
 layout(location = 0) in uint InstanceIndex[];
@@ -18,11 +18,11 @@ layout(location = 0) out vec3 WorldPos_ES_in[];
 layout(location = 1) out vec2 TexCoord_ES_in[];
 layout(location = 2) out float GridSize[];
 
-const float maxDist = 600.0; 
-const float minDist = 200.0;
+const float maxDist = 600.0; // probably too big
+const float minDist = 1.0;
 
 const float maxTess = 20.0;
-const float minTess = 3.0;
+const float minTess = 4.0;
 
 vec3 calcPos(in uint cornerNum)
 {
@@ -43,6 +43,7 @@ vec2 calcTexcoord(in uint cornerNum)
 float GetTessLevel(in float dist)
 {
   dist = clamp((dist - minDist) / (maxDist - minDist), 0.0, 1.0);
+  dist = sqrt(dist);
   return mix(maxTess, minTess, dist);
 }
 
@@ -100,10 +101,11 @@ void main()
     return;
   }
 
-  const float dist00 = distance(corner00, eye);
-  const float dist01 = distance(corner01, eye);
-  const float dist10 = distance(corner10, eye);
-  const float dist11 = distance(corner11, eye);
+  // we only consider the horizontal distance, because the real height of a chunk is variable
+  const float dist00 = distance(corner00.xz, eye.xz);
+  const float dist01 = distance(corner01.xz, eye.xz);
+  const float dist10 = distance(corner10.xz, eye.xz);
+  const float dist11 = distance(corner11.xz, eye.xz);
 
   const float ol0 = min(dist00, dist01);
   const float ol1 = min(dist00, dist10);
