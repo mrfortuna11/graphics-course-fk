@@ -4,8 +4,8 @@
 #include <etna/Sampler.hpp>
 #include <etna/Buffer.hpp>
 #include <etna/GraphicsPipeline.hpp>
-#include <etna/GpuSharedResource.hpp>
 #include <etna/ComputePipeline.hpp>
+#include <etna/GpuSharedResource.hpp>
 #include <glm/glm.hpp>
 
 #include "scene/SceneManager.hpp"
@@ -44,6 +44,7 @@ private:
 
   etna::Image mainViewDepth;
   etna::Image perlinTex;
+  etna::Image normalMap;
   etna::GpuSharedResource<etna::Buffer> modelMatrices;
 
   glm::mat4x4 worldViewProj;
@@ -54,6 +55,7 @@ private:
 
   etna::GraphicsPipeline staticMeshPipeline{};
   etna::ComputePipeline perlinPipeline{};
+  etna::ComputePipeline normalPipeline{};
   etna::GraphicsPipeline terrainPipeline{};
 
   struct TerrainPushConst
@@ -62,7 +64,7 @@ private:
     glm::vec3 eye;
   };
 
-  etna::Sampler perlinSampler;  
+  etna::Sampler perlinSampler;
 
   glm::uvec2 resolution;
 };

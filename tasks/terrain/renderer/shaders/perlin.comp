@@ -6,7 +6,7 @@ layout(binding = 0, r32f) restrict writeonly uniform image2D resultImage;
 vec2 randomGradient(in ivec2 coord)
 {
   const uint w = 32u;
-  const uint s = w / 2u; 
+  const uint s = w / 2u; // rotation width
   uint a = uint(coord.x);
   uint b = uint(coord.y);
   a *= 3284157443u;
@@ -14,7 +14,7 @@ vec2 randomGradient(in ivec2 coord)
   b *= 1911520717u;
   a ^= b << s | b >> w - s;
   a *= 2048419325u;
-  float random = float(a) * (3.14159265 / float(~(~0u >> 1u)));
+  float random = float(a) * (3.14159265 / float(~(~0u >> 1u))); // in [0, 2*Pi]
   vec2 v;
   v.x = cos(random);
   v.y = sin(random);

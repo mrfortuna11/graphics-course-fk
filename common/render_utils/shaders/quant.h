@@ -1,5 +1,5 @@
-#ifndef QUANTIZATION_H_INCLUDED
-#define QUANTIZATION_H_INCLUDED
+#ifndef QUANT_H_INCLUDED
+#define QUANT_H_INCLUDED
 
 #ifdef __cplusplus
 
@@ -7,14 +7,24 @@
 #include <algorithm>
 #include <bit>
 
-inline uint32_t quantize4fnorm(glm::vec4 in)
+inline uint32_t quantize4fnorm(glm::vec4 normal)
 {
-  int8_t coords[4] = {
-    (int8_t)roundf(in.x * 127.f),
-    (int8_t)roundf(in.y * 127.f),
-    (int8_t)roundf(in.z * 127.f),
-    (int8_t)roundf(in.w * 127.f)};
-  return std::bit_cast<uint32_t>(coords);
+
+  const int8_t x = static_cast<int8_t>(round(normal.x * 127.0));
+  const int8_t y = static_cast<int8_t>(round(normal.y * 127.0));
+  const int8_t z = static_cast<int8_t>(round(normal.z * 127.0));
+  const int8_t w = static_cast<int8_t>(round(normal.w * 127.0));
+
+  int8_t arr[4] = {x, y, z, w};
+
+  auto res = std::bit_cast<uint32_t>(arr);
+
+  return res;
+}
+
+inline std::uint32_t quantize4fnorm(glm::vec3 normal)
+{
+  return quantize4fnorm(glm::vec4{normal, 0});
 }
 
 glm::vec3 dequantize3fnorm(uint32_t q)
