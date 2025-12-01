@@ -28,8 +28,10 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
   });
 
   modelMatrices.iterate([&](auto& buf) {
+    size_t size = sceneMgr->getInstanceMatrices().size_bytes();
+    if (size == 0) size = sizeof(glm::mat4);
     buf = ctx.createBuffer(etna::Buffer::CreateInfo{
-      .size = sceneMgr->getInstanceMatrices().size_bytes(),
+      .size = size,
       .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
       .memoryUsage = VMA_MEMORY_USAGE_CPU_TO_GPU,
       .name = "model_matrices",
