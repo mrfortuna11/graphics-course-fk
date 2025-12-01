@@ -70,16 +70,16 @@ void WorldRenderer::loadShaders()
 {
   etna::create_program(
     "static_mesh_material",
-    {TERRAIN_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
-     TERRAIN_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
-  etna::create_program("perlin", {TERRAIN_RENDERER_SHADERS_ROOT "perlin.comp.spv"});
-  etna::create_program("normal", {TERRAIN_RENDERER_SHADERS_ROOT "normal.comp.spv"});
+    {TONEMAPPING_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
+     TONEMAPPING_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+  etna::create_program("perlin", {TONEMAPPING_RENDERER_SHADERS_ROOT "perlin.comp.spv"});
+  etna::create_program("normal", {TONEMAPPING_RENDERER_SHADERS_ROOT "normal.comp.spv"});
   etna::create_program(
     "terrain_render",
-    {TERRAIN_RENDERER_SHADERS_ROOT "quad.vert.spv",
-     TERRAIN_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
-     TERRAIN_RENDERER_SHADERS_ROOT "terrain.tese.spv",
-     TERRAIN_RENDERER_SHADERS_ROOT "terrain.frag.spv"});
+    {TONEMAPPING_RENDERER_SHADERS_ROOT "quad.vert.spv",
+     TONEMAPPING_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
+     TONEMAPPING_RENDERER_SHADERS_ROOT "terrain.tese.spv",
+     TONEMAPPING_RENDERER_SHADERS_ROOT "terrain.frag.spv"});
 }
 
 void WorldRenderer::setupPipelines(vk::Format swapchain_format)
