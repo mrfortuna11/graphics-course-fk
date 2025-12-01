@@ -234,30 +234,14 @@ void WorldRenderer::renderWorld(
 {
   ETNA_PROFILE_GPU(cmd_buf, renderWorld);
 
-  // draw final scene to screen
-  {
-    ETNA_PROFILE_GPU(cmd_buf, renderForward);
-
-    etna::RenderTargetState renderTargets(
-      cmd_buf,
-      {{0, 0}, {resolution.x, resolution.y}},
-      {{.image = target_image, .view = target_image_view}},
-      {.image = mainViewDepth.get(), .view = mainViewDepth.getView({})});
-
-    cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, staticMeshPipeline.getVkPipeline());
-    renderScene(cmd_buf, worldViewProj, staticMeshPipeline.getVkPipelineLayout());
-  }
-
-
+  // draw terrain only
   {
     ETNA_PROFILE_GPU(cmd_buf, renderTerrain);
     etna::RenderTargetState renderTargets(
       cmd_buf,
       {{0, 0}, {resolution.x, resolution.y}},
-      {{.image = target_image, .view = target_image_view, .loadOp = vk::AttachmentLoadOp::eLoad}},
-      {.image = mainViewDepth.get(),
-       .view = mainViewDepth.getView({}),
-       .loadOp = vk::AttachmentLoadOp::eLoad});
+      {{.image = target_image, .view = target_image_view}},
+      {.image = mainViewDepth.get(), .view = mainViewDepth.getView({})});
     renderTerrain(cmd_buf);
   }
 }
