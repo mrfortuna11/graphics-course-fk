@@ -57,7 +57,7 @@ void Renderer::initFrameDelivery(vk::UniqueSurfaceKHR a_surface, ResolutionProvi
   resolution = {w, h};
 
   worldRenderer->loadShaders();
-  worldRenderer->setupPipelines(window->getCurrentFormat());
+  worldRenderer->setupPipelines();
   worldRenderer->allocateResources(resolution);
 }
 
@@ -108,7 +108,7 @@ void Renderer::drawFrame()
     {
       ETNA_PROFILE_GPU(currentCmdBuf, renderFrame);
 
-      worldRenderer->renderWorld(currentCmdBuf, image, view);
+      worldRenderer->renderWorld(currentCmdBuf, image);
 
       etna::set_state(
         currentCmdBuf,

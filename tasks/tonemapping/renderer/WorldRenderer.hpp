@@ -23,13 +23,13 @@ public:
 
   void loadShaders();
   void allocateResources(glm::uvec2 swapchain_resolution);
-  void setupPipelines(vk::Format swapchain_format);
+  void setupPipelines();
 
   void debugInput(const Keyboard& kb);
   void update(const FramePacket& packet);
   void drawGui();
   void renderWorld(
-    vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view);
+    vk::CommandBuffer cmd_buf, vk::Image target_image/*, vk::ImageView target_image_view*/);
 
 private:
   void renderScene(
@@ -42,6 +42,7 @@ private:
 private:
   std::unique_ptr<SceneManager> sceneMgr;
 
+  etna::Image mainView;
   etna::Image mainViewDepth;
   etna::Image perlinTex;
   etna::Image normalMap;
