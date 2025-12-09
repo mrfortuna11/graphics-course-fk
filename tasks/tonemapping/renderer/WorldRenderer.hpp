@@ -46,7 +46,6 @@ private:
   etna::Image mainViewDepth;
   etna::Image perlinTex;
   etna::Image normalMap;
-  etna::Image tonemapTarget;
   etna::GpuSharedResource<etna::Buffer> modelMatrices;
 
   glm::mat4x4 worldViewProj;
@@ -58,7 +57,6 @@ private:
   etna::GraphicsPipeline staticMeshPipeline{};
   etna::ComputePipeline perlinPipeline{};
   etna::ComputePipeline normalPipeline{};
-  etna::ComputePipeline tonemappingPipeline{};
   etna::GraphicsPipeline terrainPipeline{};
 
   struct TerrainPushConst
