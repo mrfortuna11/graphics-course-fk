@@ -6,6 +6,7 @@
 #include <function2/function2.hpp>
 
 #include "wsi/Keyboard.hpp"
+#include "gui/ImGuiRenderer.hpp"
 
 #include "FramePacket.hpp"
 #include "WorldRenderer.hpp"
@@ -34,6 +35,7 @@ private:
 
   std::unique_ptr<etna::Window> window;
   std::unique_ptr<etna::PerFrameCmdMgr> commandManager;
+  std::unique_ptr<ImGuiRenderer> guiRenderer;
 
   glm::uvec2 resolution;
   bool useVsync = true;
