@@ -49,7 +49,6 @@ private:
 
   glm::mat4x4 worldViewProj;
   glm::vec3 eye;
-  glm::mat4x4 lightMatrix;
   float nearPlane;
   float farPlane;
 
@@ -62,9 +61,14 @@ private:
   {
     glm::mat4 proj;
     glm::vec3 eye;
+    float heightScale;
   };
 
   etna::Sampler perlinSampler;
 
   glm::uvec2 resolution;
+
+  // Terrain generation parameters
+  float terrainHeightScale = 200.0f;
+  bool terrainRegenerateRequested = false;
 };

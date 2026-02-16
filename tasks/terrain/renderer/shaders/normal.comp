@@ -23,5 +23,7 @@ void main()
   ivec2 idxy = ivec2(gl_GlobalInvocationID.xy);
   idxy = clamp(idxy, ivec2(1, 1), ivec2(4094, 4094));
   vec3 res = calcNorm(idxy);
-  imageStore(normal, idxy, vec4(res, 0));
+  // Convert from [-1, 1] to [0, 1] for unsigned normalized format
+  res = res * 0.5 + 0.5;
+  imageStore(normal, idxy, vec4(res, 1.0));
 }

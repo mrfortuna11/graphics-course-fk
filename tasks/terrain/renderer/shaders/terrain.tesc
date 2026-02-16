@@ -6,6 +6,7 @@ layout(push_constant) uniform params_t
 {
   mat4 mProjView;
   vec3 eye;
+  float heightScale;
 };
 
 

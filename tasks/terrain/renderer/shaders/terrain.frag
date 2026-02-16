@@ -18,7 +18,10 @@ void main()
   const vec3 wLightPos = vec3(0, 10, 0);
   const vec3 surfaceColor = vec3(1.0f, 1.0f, 1.0f);
   const vec3 lightColor = vec3(1.0f, 1.0f, 1.0f);
-  const vec3 wNorm = texture(normalMap, surf.texCoord).xyz;
+  vec3 wNorm = texture(normalMap, surf.texCoord).xyz;
+  // Convert from [0, 1] back to [-1, 1]
+  wNorm = wNorm * 2.0 - 1.0;
+  wNorm = normalize(wNorm);
 
   const vec3 lightDir = normalize(wLightPos - surf.wPos);
   const vec3 diffuse = max(dot(wNorm, lightDir), 0.0f) * lightColor;
