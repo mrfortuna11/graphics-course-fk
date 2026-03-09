@@ -1,6 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <span>
+#include <vector>
 
 #include <glm/glm.hpp>
 #include <tiny_gltf.h>
@@ -16,14 +20,7 @@ struct RenderElement
   std::uint32_t vertexOffset;
   std::uint32_t indexOffset;
   std::uint32_t indexCount;
-  // Not implemented!
-  // Material* material;
-};
-
-struct BoundingBox
-{
-  std::array<float, 3> maxCoord;
-  std::array<float, 3> minCoord;
+  std::uint32_t albedoTextureIdx;
 };
 
 // A mesh is a collection of relems. A scene may have the same mesh
@@ -33,17 +30,21 @@ struct Mesh
 {
   std::uint32_t firstRelem;
   std::uint32_t relemCount;
-
-  BoundingBox box;
 };
 
 class SceneManager
 {
 public:
+  struct SceneTexture
+  {
+    std::uint32_t width;
+    std::uint32_t height;
+    std::vector<std::uint8_t> rgba8;
+  };
+
   SceneManager();
 
-  void selectScene(std::filesystem::path path);
-  void selectScenePrebaked(std::filesystem::path path);
+  void selectScene(std::filesystem::path path, bool baked);
 
   // Every instance is a mesh drawn with a certain transform
   // NOTE: maybe you can pass some additional data through unused matrix entries?
@@ -56,6 +57,17 @@ public:
   // Every relem is a single draw call
   std::span<const RenderElement> getRenderElements() { return renderElements; }
 
+  std::span<const SceneTexture> getAlbedoTextures() { return albedoTextures; }
+
+  struct AABB
+  {
+    glm::vec3 min;
+    glm::vec3 max;
+  };
+
+  // Axis-aligned bounding box for every RenderElement in model/local space
+  std::span<const AABB> getRenderElementAABBs() { return renderElementAABBs; }
+
   vk::Buffer getVertexBuffer() { return unifiedVbuf.get(); }
   vk::Buffer getIndexBuffer() { return unifiedIbuf.get(); }
 
@@ -63,6 +75,8 @@ public:
 
 private:
   std::optional<tinygltf::Model> loadModel(std::filesystem::path path);
+
+  std::vector<SceneTexture> processAlbedoTextures(const tinygltf::Model& model) const;
 
   struct ProcessedInstances
   {
@@ -88,28 +102,23 @@ private:
     std::vector<std::uint32_t> indices;
     std::vector<RenderElement> relems;
     std::vector<Mesh> meshes;
+    std::vector<AABB> aabbs;
   };
 
-  struct ProcessedMeshesBaked
-  {
-    std::span<const Vertex> vertices;
-    std::span<const std::uint32_t> indices;
-    std::vector<RenderElement> relems;
-    std::vector<Mesh> meshes;
-  };
   ProcessedMeshes processMeshes(const tinygltf::Model& model) const;
-  void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
-  ProcessedMeshesBaked processMeshesBaked(const tinygltf::Model& model) const;
+  ProcessedMeshes processBakedMeshes(const tinygltf::Model& model) const;
+  void uploadData(std::span<const Vertex> vertices, std::span<const std::uint32_t>);
 
 private:
-  tinygltf::TinyGLTF loader;
   std::unique_ptr<etna::OneShotCmdMgr> oneShotCommands;
   etna::BlockingTransferHelper transferHelper;
 
   std::vector<RenderElement> renderElements;
   std::vector<Mesh> meshes;
+  std::vector<AABB> renderElementAABBs;
   std::vector<glm::mat4x4> instanceMatrices;
   std::vector<std::uint32_t> instanceMeshes;
+  std::vector<SceneTexture> albedoTextures;
 
   etna::Buffer unifiedVbuf;
   etna::Buffer unifiedIbuf;

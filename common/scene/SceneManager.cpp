@@ -1,7 +1,11 @@
 #include "SceneManager.hpp"
 
-#include <limits>
+#include <array>
+#include <cctype>
 #include <stack>
+#include <bit>
+#include <cstring>
+#include <limits>
 
 #include <spdlog/spdlog.h>
 #include <fmt/std.h>
@@ -17,9 +21,99 @@ SceneManager::SceneManager()
 {
 }
 
+namespace
+{
+
+struct SceneFsUserData
+{
+  std::filesystem::path sceneDir;
+};
+
+bool is_image_extension(std::filesystem::path path)
+{
+  auto ext = path.extension().string();
+  for (auto& c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" ||
+         ext == ".gif" || ext == ".webp" || ext == ".ktx" || ext == ".ktx2";
+}
+
+std::string remap_texture_to_textures_subfolder(const std::string& filepath, void* user_data)
+{
+  const auto expanded = tinygltf::ExpandFilePath(filepath, nullptr);
+
+  auto* fsUserData = static_cast<SceneFsUserData*>(user_data);
+  if (!fsUserData)
+    return expanded;
+
+  const std::filesystem::path sourcePath = expanded;
+  if (!is_image_extension(sourcePath))
+    return expanded;
+
+  const auto remapped = fsUserData->sceneDir / "textures" / sourcePath.filename();
+  const auto remappedExpanded = tinygltf::ExpandFilePath(remapped.string(), nullptr);
+
+  if (tinygltf::FileExists(remappedExpanded, nullptr))
+    return remappedExpanded;
+
+  return expanded;
+}
+
+bool scene_file_exists(const std::string& abs_filename, void* user_data)
+{
+  return tinygltf::FileExists(remap_texture_to_textures_subfolder(abs_filename, user_data), nullptr);
+}
+
+bool scene_read_whole_file(
+  std::vector<unsigned char>* out,
+  std::string* err,
+  const std::string& filepath,
+  void* user_data)
+{
+  return tinygltf::ReadWholeFile(
+    out, err, remap_texture_to_textures_subfolder(filepath, user_data), nullptr);
+}
+
+bool scene_write_whole_file(
+  std::string* err,
+  const std::string& filepath,
+  const std::vector<unsigned char>& contents,
+  void*)
+{
+  return tinygltf::WriteWholeFile(err, filepath, contents, nullptr);
+}
+
+bool scene_get_file_size(
+  size_t* filesize_out,
+  std::string* err,
+  const std::string& abs_filename,
+  void* user_data)
+{
+  return tinygltf::GetFileSizeInBytes(
+    filesize_out,
+    err,
+    remap_texture_to_textures_subfolder(abs_filename, user_data),
+    nullptr);
+}
+
+} // namespace
+
 std::optional<tinygltf::Model> SceneManager::loadModel(std::filesystem::path path)
 {
   tinygltf::Model model;
+  tinygltf::TinyGLTF loader;
+
+  SceneFsUserData fsUserData{.sceneDir = path.parent_path()};
+  loader.SetFsCallbacks(
+    tinygltf::FsCallbacks{
+      .FileExists = scene_file_exists,
+      .ExpandFilePath = tinygltf::ExpandFilePath,
+      .ReadWholeFile = scene_read_whole_file,
+      .WriteWholeFile = scene_write_whole_file,
+      .GetFileSizeInBytes = scene_get_file_size,
+      .user_data = &fsUserData,
+    });
 
   std::string error;
   std::string warning;
@@ -114,32 +208,21 @@ SceneManager::ProcessedInstances SceneManager::processInstances(const tinygltf::
 
   ProcessedInstances result;
 
-  std::vector<std::size_t> meshBucketCounts(model.meshes.size());
-
   // Don't overallocate matrices, they are pretty chonky.
   {
     std::size_t totalNodesWithMeshes = 0;
     for (std::size_t i = 0; i < model.nodes.size(); ++i)
       if (model.nodes[i].mesh >= 0)
-      {
         ++totalNodesWithMeshes;
-        ++meshBucketCounts[model.nodes[i].mesh];
-      }
-    result.matrices.resize(totalNodesWithMeshes);
-    result.meshes.resize(totalNodesWithMeshes);
-  }
-
-  for (size_t i = 1; i < meshBucketCounts.size(); ++i)
-  {
-    meshBucketCounts[i] += meshBucketCounts[i - 1];
+    result.matrices.reserve(totalNodesWithMeshes);
+    result.meshes.reserve(totalNodesWithMeshes);
   }
 
   for (std::size_t i = 0; i < model.nodes.size(); ++i)
     if (model.nodes[i].mesh >= 0)
     {
-      std::size_t index = --meshBucketCounts[model.nodes[i].mesh];
-      result.matrices[index] = nodeTransforms[i];
-      result.meshes[index] = model.nodes[i].mesh;
+      result.matrices.push_back(nodeTransforms[i]);
+      result.meshes.push_back(model.nodes[i].mesh);
     }
 
   return result;
@@ -155,6 +238,141 @@ static std::uint32_t encode_normal(glm::vec3 normal)
   const std::uint32_t sy = static_cast<std::uint32_t>(y & 0xffff) << 16;
 
   return sx | sy;
+}
+
+static std::vector<std::uint8_t> image_to_rgba8(const tinygltf::Image& image)
+{
+  if (image.width <= 0 || image.height <= 0 || image.image.empty())
+    return {};
+
+  const std::size_t pixelCount = static_cast<std::size_t>(image.width) *
+                                 static_cast<std::size_t>(image.height);
+
+  if (image.bits != 8 && image.bits != 16)
+    return {};
+
+  const std::size_t bytesPerChannel = image.bits / 8;
+  if (bytesPerChannel == 0)
+    return {};
+
+  const std::size_t srcChannels = static_cast<std::size_t>(image.component);
+  if (srcChannels < 1 || srcChannels > 4)
+    return {};
+
+  const std::size_t srcStride = srcChannels * bytesPerChannel;
+  if (image.image.size() < pixelCount * srcStride)
+    return {};
+
+  std::vector<std::uint8_t> rgba(pixelCount * 4u, 255u);
+
+  auto read_channel_8bit = [&](const std::uint8_t* ptr) -> std::uint8_t {
+    if (image.bits == 8)
+      return ptr[0];
+
+    std::uint16_t value = 0;
+    std::memcpy(&value, ptr, sizeof(value));
+    return static_cast<std::uint8_t>(value >> 8);
+  };
+
+  for (std::size_t i = 0; i < pixelCount; ++i)
+  {
+    const std::uint8_t* src = image.image.data() + i * srcStride;
+
+    const std::uint8_t c0 = read_channel_8bit(src + 0 * bytesPerChannel);
+    const std::uint8_t c1 = srcChannels >= 2 ? read_channel_8bit(src + 1 * bytesPerChannel) : c0;
+    const std::uint8_t c2 = srcChannels >= 3 ? read_channel_8bit(src + 2 * bytesPerChannel) : c0;
+    const std::uint8_t c3 = srcChannels >= 4 ? read_channel_8bit(src + 3 * bytesPerChannel)
+                                             : static_cast<std::uint8_t>(255u);
+
+    rgba[i * 4 + 0] = c0;
+    rgba[i * 4 + 1] = srcChannels == 2 ? c0 : c1;
+    rgba[i * 4 + 2] = srcChannels == 2 ? c0 : c2;
+    rgba[i * 4 + 3] = c3;
+  }
+
+  return rgba;
+}
+
+std::vector<SceneManager::SceneTexture> SceneManager::processAlbedoTextures(
+  const tinygltf::Model& model) const
+{
+  std::vector<SceneTexture> textures;
+  textures.reserve(model.images.size() + 1u);
+
+  textures.push_back(SceneTexture{
+    .width = 1,
+    .height = 1,
+    .rgba8 = {255u, 255u, 255u, 255u},
+  });
+
+  for (std::size_t i = 0; i < model.images.size(); ++i)
+  {
+    const auto& img = model.images[i];
+    auto rgba8 = image_to_rgba8(img);
+    if (rgba8.empty())
+    {
+      spdlog::warn(
+        "glTF: image #{} has unsupported format (bits={}, components={}), using white fallback",
+        i,
+        img.bits,
+        img.component);
+      textures.push_back(SceneTexture{
+        .width = 1,
+        .height = 1,
+        .rgba8 = {255u, 255u, 255u, 255u},
+      });
+      continue;
+    }
+
+    textures.push_back(SceneTexture{
+      .width = static_cast<std::uint32_t>(img.width),
+      .height = static_cast<std::uint32_t>(img.height),
+      .rgba8 = std::move(rgba8),
+    });
+  }
+
+  return textures;
+}
+
+static std::uint32_t resolve_albedo_texture_idx(
+  const tinygltf::Model& model, int primitiveMaterialIdx, std::uint32_t defaultTextureIdx)
+{
+  if (primitiveMaterialIdx < 0 || primitiveMaterialIdx >= static_cast<int>(model.materials.size()))
+    return defaultTextureIdx;
+
+  auto resolveImageIndexFromTexture = [&](int textureIdx) -> std::uint32_t {
+    if (textureIdx < 0 || textureIdx >= static_cast<int>(model.textures.size()))
+      return defaultTextureIdx;
+
+    const auto& texture = model.textures[textureIdx];
+    if (texture.source < 0 || texture.source >= static_cast<int>(model.images.size()))
+      return defaultTextureIdx;
+
+    return static_cast<std::uint32_t>(texture.source + 1);
+  };
+
+  const auto& material = model.materials[primitiveMaterialIdx];
+
+  if (material.pbrMetallicRoughness.baseColorTexture.index >= 0)
+    return resolveImageIndexFromTexture(material.pbrMetallicRoughness.baseColorTexture.index);
+
+  auto extIt = material.extensions.find("KHR_materials_pbrSpecularGlossiness");
+  if (extIt == material.extensions.end() || !extIt->second.IsObject())
+    return defaultTextureIdx;
+
+  const auto& extObj = extIt->second;
+  if (!extObj.Has("diffuseTexture"))
+    return defaultTextureIdx;
+
+  const auto& diffuseTex = extObj.Get("diffuseTexture");
+  if (!diffuseTex.IsObject() || !diffuseTex.Has("index"))
+    return defaultTextureIdx;
+
+  const auto& indexValue = diffuseTex.Get("index");
+  if (!indexValue.IsInt())
+    return defaultTextureIdx;
+
+  return resolveImageIndexFromTexture(indexValue.Get<int>());
 }
 
 SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model& model) const
@@ -203,7 +421,7 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
     result.meshes.push_back(Mesh{
       .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
       .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
-      .box = {}});
+    });
 
     for (const auto& prim : mesh.primitives)
     {
@@ -250,6 +468,7 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
         .vertexOffset = static_cast<std::uint32_t>(result.vertices.size()),
         .indexOffset = static_cast<std::uint32_t>(result.indices.size()),
         .indexCount = static_cast<std::uint32_t>(accessors[0]->count),
+        .albedoTextureIdx = resolve_albedo_texture_idx(model, prim.material, 0u),
       });
 
       const std::size_t vertexCount = accessors[1]->count;
@@ -356,6 +575,21 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
           ptrs[0],
           sizeof(result.indices[0]) * indexCount);
       }
+      // Compute AABB for this render element using the vertices we just appended
+      {
+        const std::uint32_t vOff = result.relems.back().vertexOffset;
+        const std::size_t vCount = vertexCount;
+        glm::vec3 mn{std::numeric_limits<float>::infinity()};
+        glm::vec3 mx{-std::numeric_limits<float>::infinity()};
+        for (std::size_t vi = 0; vi < vCount; ++vi)
+        {
+          const auto& v = result.vertices[vOff + vi];
+          const glm::vec3 pos = glm::vec3(v.positionAndNormal);
+          mn = glm::min(mn, pos);
+          mx = glm::max(mx, pos);
+        }
+        result.aabbs.push_back(SceneManager::AABB{.min = mn, .max = mx});
+      }
     }
   }
 
@@ -383,76 +617,87 @@ void SceneManager::uploadData(
   transferHelper.uploadBuffer<std::uint32_t>(*oneShotCommands, unifiedIbuf, 0, indices);
 }
 
-
-SceneManager::ProcessedMeshesBaked SceneManager::processMeshesBaked(
-  const tinygltf::Model& model) const
+SceneManager::ProcessedMeshes SceneManager::processBakedMeshes(const tinygltf::Model& model) const
 {
+  ProcessedMeshes result;
+  std::vector<std::size_t> relemVertexCounts;
 
-  ProcessedMeshesBaked result;
+  std::size_t totalPrimitives = 0;
+  for (const auto& mesh : model.meshes)
+    totalPrimitives += mesh.primitives.size();
+  result.relems.reserve(totalPrimitives);
 
-  {
-    std::size_t totalPrimitives = 0;
-    for (const auto& mesh : model.meshes)
-      totalPrimitives += mesh.primitives.size();
-    result.relems.reserve(totalPrimitives);
-  }
 
   result.meshes.reserve(model.meshes.size());
 
   for (const auto& mesh : model.meshes)
   {
-    {
-      float min = std::numeric_limits<float>::lowest();
-      float max = std::numeric_limits<float>::max();
-      result.meshes.push_back(Mesh{
-        .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
-        .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
-        .box = {{min, min, min}, {max, max, max}}});
-    }
+    result.meshes.push_back(Mesh{
+      .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
+      .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
+    });
 
     for (const auto& prim : mesh.primitives)
     {
-      auto& indAccessor = model.accessors[prim.indices];
-      auto& posAccessor = model.accessors[prim.attributes.at("POSITION")];
-
+      if (prim.mode != TINYGLTF_MODE_TRIANGLES)
       {
-        auto& resBox = result.meshes.back().box;
-        auto& currMax = posAccessor.maxValues;
-        auto& currMin = posAccessor.minValues;
-        for (std::size_t i = 0; i < 3; ++i)
-        {
-          resBox.maxCoord[i] = std::max(resBox.maxCoord[i], static_cast<float>(currMax[i]));
-          resBox.minCoord[i] = std::min(resBox.minCoord[i], static_cast<float>(currMin[i]));
-        }
+        spdlog::warn("Not triangles primitive!");
+        --result.meshes.back().relemCount;
+        continue;
       }
+
+      const tinygltf::Accessor& indAccessor = model.accessors[prim.indices];
+      const tinygltf::Accessor& posAccessor = model.accessors[prim.attributes.at("POSITION")];
 
       result.relems.push_back(RenderElement{
         .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
-        .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(uint32_t)),
+        .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(std::uint32_t)),
         .indexCount = static_cast<std::uint32_t>(indAccessor.count),
+        .albedoTextureIdx = resolve_albedo_texture_idx(model, prim.material, 0u),
       });
+      relemVertexCounts.push_back(posAccessor.count);
     }
   }
+  size_t vertex_count = model.bufferViews[0].byteLength / sizeof(Vertex);
+  result.vertices.resize(vertex_count);
+  memcpy(result.vertices.data(), model.buffers[0].data.data(), model.bufferViews[0].byteLength);
 
+  size_t index_count = model.bufferViews[1].byteLength / sizeof(std::uint32_t);
+  result.indices.resize(index_count);
+  memcpy(
+    result.indices.data(),
+    model.buffers[0].data.data() + model.bufferViews[0].byteLength,
+    model.bufferViews[1].byteLength);
+
+  result.aabbs.reserve(result.relems.size());
+  for (std::size_t i = 0; i < result.relems.size(); ++i)
   {
-    auto ptr = model.buffers[0].data.data();
-    auto vertexCount = model.bufferViews[0].byteLength / sizeof(Vertex);
-    auto indexCount = model.bufferViews[1].byteLength / sizeof(uint32_t);
-    result.indices = {
-      reinterpret_cast<const uint32_t*>(ptr + vertexCount * sizeof(Vertex)), indexCount};
-    result.vertices = {reinterpret_cast<const Vertex*>(ptr), vertexCount};
+    const std::uint32_t vOff = result.relems[i].vertexOffset;
+    const std::size_t vCount = relemVertexCounts[i];
+    glm::vec3 mn{std::numeric_limits<float>::infinity()};
+    glm::vec3 mx{-std::numeric_limits<float>::infinity()};
+    for (std::size_t vi = 0; vi < vCount; ++vi)
+    {
+      const auto& v = result.vertices[vOff + vi];
+      const glm::vec3 pos = glm::vec3(v.positionAndNormal);
+      mn = glm::min(mn, pos);
+      mx = glm::max(mx, pos);
+    }
+    result.aabbs.push_back(SceneManager::AABB{.min = mn, .max = mx});
   }
 
   return result;
 }
 
-void SceneManager::selectScene(std::filesystem::path path)
+void SceneManager::selectScene(std::filesystem::path path, bool baked)
 {
   auto maybeModel = loadModel(path);
   if (!maybeModel.has_value())
     return;
 
   auto model = std::move(*maybeModel);
+
+  albedoTextures = processAlbedoTextures(model);
 
   // By aggregating all SceneManager fields mutations here,
   // we guarantee that we don't forget to clear something
@@ -463,12 +708,23 @@ void SceneManager::selectScene(std::filesystem::path path)
   instanceMatrices = std::move(instMats);
   instanceMeshes = std::move(instMeshes);
 
-  auto [verts, inds, relems, meshs] = processMeshes(model);
+  if (baked)
+  {
+    auto [verts, inds, relems, meshs, aabbs] = processBakedMeshes(model);
+    renderElements = std::move(relems);
+    meshes = std::move(meshs);
+    renderElementAABBs = std::move(aabbs);
+    uploadData(verts, inds);
+  }
+  else
+  {
+    auto [verts, inds, relems, meshs, aabbs] = processMeshes(model);
+    renderElements = std::move(relems);
+    meshes = std::move(meshs);
+    renderElementAABBs = std::move(aabbs);
 
-  renderElements = std::move(relems);
-  meshes = std::move(meshs);
-
-  uploadData(verts, inds);
+    uploadData(verts, inds);
+  }
 }
 
 etna::VertexByteStreamFormatDescription SceneManager::getVertexFormatDescription()
@@ -485,25 +741,4 @@ etna::VertexByteStreamFormatDescription SceneManager::getVertexFormatDescription
         .offset = sizeof(glm::vec4),
       },
     }};
-}
-
-void SceneManager::selectScenePrebaked(std::filesystem::path path)
-{
-  auto maybeModel = loadModel(path);
-  if (!maybeModel.has_value())
-    return;
-
-  auto model = std::move(*maybeModel);
-
-  // NOTE: you might want to store these on the GPU for GPU-driven rendering.
-  auto [instMats, instMeshes] = processInstances(model);
-  instanceMatrices = std::move(instMats);
-  instanceMeshes = std::move(instMeshes);
-
-  auto [verts, inds, relems, meshs] = processMeshesBaked(model);
-
-  renderElements = std::move(relems);
-  meshes = std::move(meshs);
-
-  uploadData(verts, inds);
 }
