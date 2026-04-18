@@ -11,7 +11,10 @@ layout(location = 1) in vec4 vTexCoordAndTang;
 layout(push_constant) uniform params_t
 {
   mat4 mProjView;
+  vec4 baseColorFactor;
+  vec4 materialParams;
   uint isBaked;
+  uint debugMode;
 } params;
 
 layout(set = 0, binding = 0) buffer InstanceMatrices

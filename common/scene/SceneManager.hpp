@@ -12,6 +12,39 @@
 #include <etna/BlockingTransferHelper.hpp>
 #include <etna/VertexInput.hpp>
 
+enum class TextureId : std::uint32_t
+{
+  // Built-in 1x1 fallback textures
+  DefaultBaseColor = 0,
+  DefaultMetallicRoughness = 1,
+  DefaultNormal = 2,
+  DefaultOcclusion = 3,
+  BuiltInCount = 4,
+
+  Invalid = ~std::uint32_t{0},
+};
+
+enum class MaterialId : std::uint32_t
+{
+  Invalid = ~std::uint32_t{0},
+};
+
+// A glTF PBR metallic-roughness material
+struct Material
+{
+  TextureId baseColorTex = TextureId::DefaultBaseColor;
+  TextureId metallicRoughnessTex = TextureId::DefaultMetallicRoughness;
+  TextureId normalTex = TextureId::DefaultNormal;
+  TextureId occlusionTex = TextureId::DefaultOcclusion;
+
+  glm::vec4 baseColorFactor = glm::vec4(1.0f);
+  float metallicFactor = 1.0f;
+  float roughnessFactor = 1.0f;
+  float normalScale = 1.0f;
+  float occlusionStrength = 1.0f;
+
+  bool doubleSided = false;
+};
 
 // A single render element (relem) corresponds to a single draw call
 // of a certain pipeline with specific bindings (including material data)
@@ -20,7 +53,7 @@ struct RenderElement
   std::uint32_t vertexOffset;
   std::uint32_t indexOffset;
   std::uint32_t indexCount;
-  std::uint32_t albedoTextureIdx;
+  MaterialId materialId;
 };
 
 // A mesh is a collection of relems. A scene may have the same mesh
@@ -40,6 +73,9 @@ public:
     std::uint32_t width;
     std::uint32_t height;
     std::vector<std::uint8_t> rgba8;
+    // true  => data is sRGB-encoded (baseColor, emissive). Upload as R8G8B8A8_SRGB.
+    // false => data is linear (metallicRoughness, normal, occlusion). Upload as R8G8B8A8_UNORM.
+    bool isSrgb = false;
   };
 
   SceneManager();
@@ -57,7 +93,12 @@ public:
   // Every relem is a single draw call
   std::span<const RenderElement> getRenderElements() { return renderElements; }
 
-  std::span<const SceneTexture> getAlbedoTextures() { return albedoTextures; }
+  // Every material is a set of factors and texture ids, referenced by relems.
+  std::span<const Material> getMaterials() { return materials; }
+
+  // All textures used by scene materials. The first TextureId::BuiltInCount
+  // entries are 1x1 fallbacks, the rest come from the glTF file
+  std::span<const SceneTexture> getTextures() { return textures; }
 
   struct AABB
   {
@@ -76,7 +117,17 @@ public:
 private:
   std::optional<tinygltf::Model> loadModel(std::filesystem::path path);
 
-  std::vector<SceneTexture> processAlbedoTextures(const tinygltf::Model& model) const;
+  // Reads all images from the glTF and prepends built-in fallbacks.
+  // The `isSrgbImage` array tracks which images are sampled in sRGB;
+  // it's built while processing materials (see processMaterials).
+  std::vector<SceneTexture> processTextures(
+    const tinygltf::Model& model, const std::vector<bool>& is_srgb_image) const;
+
+  // Parses glTF materials into our Material structs. Also fills
+  // `out_is_srgb_image` — a per-image flag indicating whether the image
+  // must be uploaded in sRGB format (baseColor, emissive).
+  std::vector<Material> processMaterials(
+    const tinygltf::Model& model, std::vector<bool>& out_is_srgb_image) const;
 
   struct ProcessedInstances
   {
@@ -118,7 +169,8 @@ private:
   std::vector<AABB> renderElementAABBs;
   std::vector<glm::mat4x4> instanceMatrices;
   std::vector<std::uint32_t> instanceMeshes;
-  std::vector<SceneTexture> albedoTextures;
+  std::vector<Material> materials;
+  std::vector<SceneTexture> textures;
 
   etna::Buffer unifiedVbuf;
   etna::Buffer unifiedIbuf;

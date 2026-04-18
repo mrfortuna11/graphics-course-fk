@@ -293,22 +293,174 @@ static std::vector<std::uint8_t> image_to_rgba8(const tinygltf::Image& image)
   return rgba;
 }
 
-std::vector<SceneManager::SceneTexture> SceneManager::processAlbedoTextures(
-  const tinygltf::Model& model) const
+// Resolves a glTF texture index (into model.textures) to our TextureId, which
+// indexes our flat textures[] array with the BuiltInCount fallback prefix.
+// Returns TextureId::Invalid if the glTF index is missing or malformed.
+static TextureId resolve_texture_id(const tinygltf::Model& model, int texture_idx)
 {
-  std::vector<SceneTexture> textures;
-  textures.reserve(model.images.size() + 1u);
+  if (texture_idx < 0 || texture_idx >= static_cast<int>(model.textures.size()))
+    return TextureId::Invalid;
+  const auto& tex = model.textures[texture_idx];
+  if (tex.source < 0 || tex.source >= static_cast<int>(model.images.size()))
+    return TextureId::Invalid;
+  return static_cast<TextureId>(
+    static_cast<std::uint32_t>(tex.source) +
+    static_cast<std::uint32_t>(TextureId::BuiltInCount));
+}
 
-  textures.push_back(SceneTexture{
-    .width = 1,
-    .height = 1,
-    .rgba8 = {255u, 255u, 255u, 255u},
-  });
+// Maps a glTF primitive's `material` field to our MaterialId.
+// Materials array layout: [0] = default material, [1..] = glTF materials.
+// Primitives without an explicit material get MaterialId{0}.
+static MaterialId resolve_material_id(int primitive_material_idx)
+{
+  if (primitive_material_idx < 0)
+    return MaterialId{0};
+  return static_cast<MaterialId>(static_cast<std::uint32_t>(primitive_material_idx) + 1u);
+}
+
+std::vector<Material> SceneManager::processMaterials(
+  const tinygltf::Model& model, std::vector<bool>& out_is_srgb_image) const
+{
+  // Every image starts out assumed to be linear; we flip to sRGB below for
+  // images sampled as baseColor (emissive would go here too, if we used it).
+  out_is_srgb_image.assign(model.images.size(), false);
+
+  auto markSrgb = [&](int texture_idx) {
+    if (texture_idx < 0 || texture_idx >= static_cast<int>(model.textures.size()))
+      return;
+    const int imgIdx = model.textures[texture_idx].source;
+    if (imgIdx >= 0 && imgIdx < static_cast<int>(out_is_srgb_image.size()))
+      out_is_srgb_image[imgIdx] = true;
+  };
+
+  std::vector<Material> result;
+  result.reserve(model.materials.size() + 1u);
+
+  // [0] — the default material used by primitives without a material reference.
+  // All fields already default to sensible values in the struct definition.
+  result.push_back(Material{});
+
+  for (const auto& gm : model.materials)
+  {
+    Material mat{};
+
+    const auto& pbr = gm.pbrMetallicRoughness;
+
+    // Base color factor (default {1,1,1,1} per glTF spec).
+    if (pbr.baseColorFactor.size() == 4)
+    {
+      mat.baseColorFactor = glm::vec4(
+        static_cast<float>(pbr.baseColorFactor[0]),
+        static_cast<float>(pbr.baseColorFactor[1]),
+        static_cast<float>(pbr.baseColorFactor[2]),
+        static_cast<float>(pbr.baseColorFactor[3]));
+    }
+
+    auto extIt = gm.extensions.find("KHR_materials_pbrSpecularGlossiness");
+    const bool hasSpecGloss = extIt != gm.extensions.end() && extIt->second.IsObject();
+
+    if (hasSpecGloss)
+    {
+      const auto& ext = extIt->second;
+      if (ext.Has("diffuseFactor"))
+      {
+        const auto& df = ext.Get("diffuseFactor");
+        if (df.IsArray() && df.ArrayLen() == 4)
+        {
+          mat.baseColorFactor = glm::vec4(
+            static_cast<float>(df.Get(0).GetNumberAsDouble()),
+            static_cast<float>(df.Get(1).GetNumberAsDouble()),
+            static_cast<float>(df.Get(2).GetNumberAsDouble()),
+            static_cast<float>(df.Get(3).GetNumberAsDouble()));
+        }
+      }
+    }
+
+    const TextureId baseColor = resolve_texture_id(model, pbr.baseColorTexture.index);
+    if (baseColor != TextureId::Invalid)
+    {
+      mat.baseColorTex = baseColor;
+      markSrgb(pbr.baseColorTexture.index);
+    }
+    else if (hasSpecGloss)
+    {
+      const auto& ext = extIt->second;
+      if (ext.Has("diffuseTexture"))
+      {
+        const auto& diffTex = ext.Get("diffuseTexture");
+        if (diffTex.IsObject() && diffTex.Has("index"))
+        {
+          const auto& idxVal = diffTex.Get("index");
+          if (idxVal.IsInt())
+          {
+            const TextureId diffuse = resolve_texture_id(model, idxVal.Get<int>());
+            if (diffuse != TextureId::Invalid)
+            {
+              mat.baseColorTex = diffuse;
+              markSrgb(idxVal.Get<int>());
+            }
+          }
+        }
+      }
+    }
+
+    mat.metallicFactor = static_cast<float>(pbr.metallicFactor);
+    mat.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
+
+    const TextureId metalRough =
+      resolve_texture_id(model, pbr.metallicRoughnessTexture.index);
+    if (metalRough != TextureId::Invalid)
+      mat.metallicRoughnessTex = metalRough;
+    // Metallic-roughness stays linear — no markSrgb call.
+
+    const TextureId normal = resolve_texture_id(model, gm.normalTexture.index);
+    if (normal != TextureId::Invalid)
+    {
+      mat.normalTex = normal;
+      mat.normalScale = static_cast<float>(gm.normalTexture.scale);
+    }
+
+    const TextureId occlusion = resolve_texture_id(model, gm.occlusionTexture.index);
+    if (occlusion != TextureId::Invalid)
+    {
+      mat.occlusionTex = occlusion;
+      mat.occlusionStrength = static_cast<float>(gm.occlusionTexture.strength);
+    }
+
+    mat.doubleSided = gm.doubleSided;
+
+    result.push_back(mat);
+  }
+
+  return result;
+}
+
+std::vector<SceneManager::SceneTexture> SceneManager::processTextures(
+  const tinygltf::Model& model, const std::vector<bool>& is_srgb_image) const
+{
+  std::vector<SceneTexture> result;
+  result.reserve(static_cast<std::size_t>(TextureId::BuiltInCount) + model.images.size());
+
+  // [0] DefaultBaseColor — white sRGB (baseColorFactor multiplies this).
+  result.push_back(SceneTexture{
+    .width = 1, .height = 1, .rgba8 = {255u, 255u, 255u, 255u}, .isSrgb = true});
+  // [1] DefaultMetallicRoughness — linear. Roughness in G, metallic in B.
+  //     (0, 255, 0, 255) ⇒ roughness=1, metallic=0 (fully rough dielectric).
+  result.push_back(SceneTexture{
+    .width = 1, .height = 1, .rgba8 = {0u, 255u, 0u, 255u}, .isSrgb = false});
+  // [2] DefaultNormal — neutral tangent-space normal (0.5, 0.5, 1.0) linear.
+  result.push_back(SceneTexture{
+    .width = 1, .height = 1, .rgba8 = {128u, 128u, 255u, 255u}, .isSrgb = false});
+  // [3] DefaultOcclusion — white linear (occlusion=1, i.e. no occlusion).
+  result.push_back(SceneTexture{
+    .width = 1, .height = 1, .rgba8 = {255u, 255u, 255u, 255u}, .isSrgb = false});
 
   for (std::size_t i = 0; i < model.images.size(); ++i)
   {
     const auto& img = model.images[i];
     auto rgba8 = image_to_rgba8(img);
+    const bool isSrgb = (i < is_srgb_image.size()) ? is_srgb_image[i] : false;
+
     if (rgba8.empty())
     {
       spdlog::warn(
@@ -316,63 +468,24 @@ std::vector<SceneManager::SceneTexture> SceneManager::processAlbedoTextures(
         i,
         img.bits,
         img.component);
-      textures.push_back(SceneTexture{
+      result.push_back(SceneTexture{
         .width = 1,
         .height = 1,
         .rgba8 = {255u, 255u, 255u, 255u},
+        .isSrgb = isSrgb,
       });
       continue;
     }
 
-    textures.push_back(SceneTexture{
+    result.push_back(SceneTexture{
       .width = static_cast<std::uint32_t>(img.width),
       .height = static_cast<std::uint32_t>(img.height),
       .rgba8 = std::move(rgba8),
+      .isSrgb = isSrgb,
     });
   }
 
-  return textures;
-}
-
-static std::uint32_t resolve_albedo_texture_idx(
-  const tinygltf::Model& model, int primitiveMaterialIdx, std::uint32_t defaultTextureIdx)
-{
-  if (primitiveMaterialIdx < 0 || primitiveMaterialIdx >= static_cast<int>(model.materials.size()))
-    return defaultTextureIdx;
-
-  auto resolveImageIndexFromTexture = [&](int textureIdx) -> std::uint32_t {
-    if (textureIdx < 0 || textureIdx >= static_cast<int>(model.textures.size()))
-      return defaultTextureIdx;
-
-    const auto& texture = model.textures[textureIdx];
-    if (texture.source < 0 || texture.source >= static_cast<int>(model.images.size()))
-      return defaultTextureIdx;
-
-    return static_cast<std::uint32_t>(texture.source + 1);
-  };
-
-  const auto& material = model.materials[primitiveMaterialIdx];
-
-  if (material.pbrMetallicRoughness.baseColorTexture.index >= 0)
-    return resolveImageIndexFromTexture(material.pbrMetallicRoughness.baseColorTexture.index);
-
-  auto extIt = material.extensions.find("KHR_materials_pbrSpecularGlossiness");
-  if (extIt == material.extensions.end() || !extIt->second.IsObject())
-    return defaultTextureIdx;
-
-  const auto& extObj = extIt->second;
-  if (!extObj.Has("diffuseTexture"))
-    return defaultTextureIdx;
-
-  const auto& diffuseTex = extObj.Get("diffuseTexture");
-  if (!diffuseTex.IsObject() || !diffuseTex.Has("index"))
-    return defaultTextureIdx;
-
-  const auto& indexValue = diffuseTex.Get("index");
-  if (!indexValue.IsInt())
-    return defaultTextureIdx;
-
-  return resolveImageIndexFromTexture(indexValue.Get<int>());
+  return result;
 }
 
 SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model& model) const
@@ -468,7 +581,7 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
         .vertexOffset = static_cast<std::uint32_t>(result.vertices.size()),
         .indexOffset = static_cast<std::uint32_t>(result.indices.size()),
         .indexCount = static_cast<std::uint32_t>(accessors[0]->count),
-        .albedoTextureIdx = resolve_albedo_texture_idx(model, prim.material, 0u),
+        .materialId = resolve_material_id(prim.material),
       });
 
       const std::size_t vertexCount = accessors[1]->count;
@@ -653,7 +766,7 @@ SceneManager::ProcessedMeshes SceneManager::processBakedMeshes(const tinygltf::M
         .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
         .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(std::uint32_t)),
         .indexCount = static_cast<std::uint32_t>(indAccessor.count),
-        .albedoTextureIdx = resolve_albedo_texture_idx(model, prim.material, 0u),
+        .materialId = resolve_material_id(prim.material),
       });
       relemVertexCounts.push_back(posAccessor.count);
     }
@@ -697,7 +810,11 @@ void SceneManager::selectScene(std::filesystem::path path, bool baked)
 
   auto model = std::move(*maybeModel);
 
-  albedoTextures = processAlbedoTextures(model);
+  // Materials must be processed before textures so we know which images
+  // are used as baseColor (and thus need sRGB encoding).
+  std::vector<bool> isSrgbImage;
+  materials = processMaterials(model, isSrgbImage);
+  textures = processTextures(model, isSrgbImage);
 
   // By aggregating all SceneManager fields mutations here,
   // we guarantee that we don't forget to clear something

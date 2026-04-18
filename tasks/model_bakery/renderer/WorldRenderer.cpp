@@ -56,10 +56,10 @@ void WorldRenderer::loadScene(std::filesystem::path path)
 
 void WorldRenderer::uploadSceneTextures()
 {
-  albedoTextures.clear();
+  sceneTextures.clear();
 
-  auto cpuTextures = sceneMgr->getAlbedoTextures();
-  albedoTextures.reserve(cpuTextures.size());
+  auto cpuTextures = sceneMgr->getTextures();
+  sceneTextures.reserve(cpuTextures.size());
 
   auto& ctx = etna::get_context();
   auto oneShot = ctx.createOneShotCmdMgr();
@@ -67,10 +67,14 @@ void WorldRenderer::uploadSceneTextures()
   for (std::size_t i = 0; i < cpuTextures.size(); ++i)
   {
     const auto& texture = cpuTextures[i];
+
+    const vk::Format format =
+      texture.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+
     auto gpuImage = ctx.createImage(etna::Image::CreateInfo{
       .extent = vk::Extent3D{texture.width, texture.height, 1},
-      .name = std::string("albedo_texture_") + std::to_string(i),
-      .format = vk::Format::eR8G8B8A8Srgb,
+      .name = std::string("scene_texture_") + std::to_string(i),
+      .format = format,
       .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
       .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
     });
@@ -83,25 +87,35 @@ void WorldRenderer::uploadSceneTextures()
       std::span<const std::byte>{
         reinterpret_cast<const std::byte*>(texture.rgba8.data()), texture.rgba8.size()});
 
-    albedoTextures.push_back(std::move(gpuImage));
+    sceneTextures.push_back(std::move(gpuImage));
   }
 
-  const auto relems = sceneMgr->getRenderElements();
-  std::size_t texturedRelems = 0;
-  std::size_t untexturedRelems = 0;
-  for (const auto& relem : relems)
+  const auto materials = sceneMgr->getMaterials();
+  std::size_t withBaseColor = 0;
+  std::size_t withMetalRough = 0;
+  std::size_t withNormal = 0;
+  std::size_t withOcclusion = 0;
+  for (const auto& m : materials)
   {
-    if (relem.albedoTextureIdx != 0u)
-      ++texturedRelems;
-    else
-      ++untexturedRelems;
+    if (m.baseColorTex != TextureId::DefaultBaseColor)
+      ++withBaseColor;
+    if (m.metallicRoughnessTex != TextureId::DefaultMetallicRoughness)
+      ++withMetalRough;
+    if (m.normalTex != TextureId::DefaultNormal)
+      ++withNormal;
+    if (m.occlusionTex != TextureId::DefaultOcclusion)
+      ++withOcclusion;
   }
 
   spdlog::info(
-    "Scene materials: {} textured relems, {} untextured relems, {} uploaded albedo textures",
-    texturedRelems,
-    untexturedRelems,
-    albedoTextures.size());
+    "Scene: {} materials, {} textures. Non-default: baseColor={}, metalRough={}, normal={}, "
+    "occlusion={}",
+    materials.size(),
+    sceneTextures.size(),
+    withBaseColor,
+    withMetalRough,
+    withNormal,
+    withOcclusion);
 }
 
 void WorldRenderer::loadShaders()
@@ -241,10 +255,12 @@ void WorldRenderer::renderScene(
   cmd_buf.bindVertexBuffers(0, {sceneMgr->getVertexBuffer()}, {0});
   cmd_buf.bindIndexBuffer(sceneMgr->getIndexBuffer(), 0, vk::IndexType::eUint32);
 
-  pushConst2M.projView = glob_tm;
-  pushConst2M.isBaked = bakedEnabled ? 1u : 0u;
+  pushConst.projView = glob_tm;
+  pushConst.isBaked = bakedEnabled ? 1u : 0u;
+  pushConst.debugMode = static_cast<std::uint32_t>(debugMode);
 
   auto relems = sceneMgr->getRenderElements();
+  auto materials = sceneMgr->getMaterials();
   auto programInfo = etna::get_shader_program("static_mesh_material");
 
   auto instanceSet = etna::create_descriptor_set(
@@ -254,24 +270,63 @@ void WorldRenderer::renderScene(
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, {instanceSet.getVkSet()}, {});
 
+  auto resolveTex = [&](TextureId id, TextureId fallback) -> const etna::Image& {
+    const auto idx = static_cast<std::uint32_t>(id);
+    if (idx < sceneTextures.size())
+      return sceneTextures[idx];
+    return sceneTextures[static_cast<std::uint32_t>(fallback)];
+  };
+
   uint32_t instanceOffset = 0;
   for (const auto& element : culledElements.elements)
   {
     const auto& relem = relems[element.relemIdx];
     const uint32_t instanceCount = static_cast<uint32_t>(element.visibleMatrices.size());
 
-    cmd_buf.pushConstants<PushConstants>(
-      pipeline_layout, vk::ShaderStageFlagBits::eVertex, 0, {pushConst2M});
+    const auto matIdx = static_cast<std::uint32_t>(relem.materialId);
+    const auto& material = materials[matIdx < materials.size() ? matIdx : 0u];
 
-    const auto textureIdx = relem.albedoTextureIdx < albedoTextures.size() ? relem.albedoTextureIdx
-                                                                           : 0u;
+    pushConst.baseColorFactor = material.baseColorFactor;
+    pushConst.materialParams = glm::vec4(
+      material.metallicFactor,
+      material.roughnessFactor,
+      material.normalScale,
+      material.occlusionStrength);
+    cmd_buf.pushConstants<PushConstants>(
+      pipeline_layout,
+      vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+      0,
+      {pushConst});
+
+    const auto& baseColorImg =
+      resolveTex(material.baseColorTex, TextureId::DefaultBaseColor);
+    const auto& metalRoughImg =
+      resolveTex(material.metallicRoughnessTex, TextureId::DefaultMetallicRoughness);
+    const auto& normalImg = resolveTex(material.normalTex, TextureId::DefaultNormal);
+    const auto& occlusionImg =
+      resolveTex(material.occlusionTex, TextureId::DefaultOcclusion);
 
     auto materialSet = etna::create_descriptor_set(
       programInfo.getDescriptorLayoutId(1),
       cmd_buf,
-      {etna::Binding{0,
-                     albedoTextures[textureIdx].genBinding(
-                       albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)}});
+      {
+        etna::Binding{
+          0,
+          baseColorImg.genBinding(
+            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
+        etna::Binding{
+          1,
+          metalRoughImg.genBinding(
+            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
+        etna::Binding{
+          2,
+          normalImg.genBinding(
+            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
+        etna::Binding{
+          3,
+          occlusionImg.genBinding(
+            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
+      });
 
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, pipeline_layout, 1, {materialSet.getVkSet()}, {});
@@ -388,6 +443,10 @@ void WorldRenderer::drawGui()
     selectedScene = static_cast<SceneType>(currentSceneIdx);
     loadSceneByType(selectedScene);
   }
+
+  const char* debugModes[] = {
+    "Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
+  ImGui::Combo("Debug view", &debugMode, debugModes, IM_ARRAYSIZE(debugModes));
 
   ImGui::Text(
     "Application average %.1f ms/frame (%.1f FPS)",

@@ -78,21 +78,30 @@ private:
   struct PushConstants
   {
     glm::mat4x4 projView;
-    uint32_t isBaked = 0;
-  } pushConst2M;
+    glm::vec4 baseColorFactor{1.f, 1.f, 1.f, 1.f};
+    // x=metallicFactor, y=roughnessFactor, z=normalScale, w=occlusionStrength
+    glm::vec4 materialParams{0.f, 1.f, 1.f, 1.f};
+    uint32_t isBaked{0};
+    uint32_t debugMode{0};
+  } pushConst;
 
   glm::mat4x4 worldViewProj;
 
   etna::GraphicsPipeline staticMeshPipeline{};
   etna::Sampler albedoSampler{};
-  std::vector<etna::Image> albedoTextures;
+  // All GPU images referenced by scene materials, indexed by TextureId
+  // Includes built-in fallback textures at the start of the array
+  std::vector<etna::Image> sceneTextures;
 
   bool logEnabled = true;
   std::uint32_t logFrameCounter = 0;
 
-  bool bakedEnabled = true;
+  bool bakedEnabled = false;
   SceneType selectedScene = SceneType::LowPolyDarkTown;
   float imguiScale = 1.5f;
+
+  // 0=Shaded, 1=BaseColor, 2=Normal, 3=MetalRough, 4=Occlusion
+  int debugMode = 0;
 
   glm::uvec2 resolution;
 };
