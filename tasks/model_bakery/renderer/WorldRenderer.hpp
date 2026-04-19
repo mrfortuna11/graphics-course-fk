@@ -81,11 +81,14 @@ private:
     glm::vec4 baseColorFactor{1.f, 1.f, 1.f, 1.f};
     // x=metallicFactor, y=roughnessFactor, z=normalScale, w=occlusionStrength
     glm::vec4 materialParams{0.f, 1.f, 1.f, 1.f};
+    // xyz=world-space camera position (needed for Fresnel / view vector), w unused
+    glm::vec4 cameraPos{0.f, 0.f, 0.f, 0.f};
     uint32_t isBaked{0};
     uint32_t debugMode{0};
   } pushConst;
 
   glm::mat4x4 worldViewProj;
+  glm::vec3 cameraWorldPos{0.f};
 
   etna::GraphicsPipeline staticMeshPipeline{};
   etna::Sampler albedoSampler{};

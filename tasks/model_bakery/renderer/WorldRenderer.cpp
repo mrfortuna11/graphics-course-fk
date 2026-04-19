@@ -167,6 +167,7 @@ void WorldRenderer::update(const FramePacket& packet)
   {
     const float aspect = float(resolution.x) / float(resolution.y);
     worldViewProj = packet.mainCam.projTm(aspect) * packet.mainCam.viewTm();
+    cameraWorldPos = packet.mainCam.position;
   }
 }
 
@@ -256,6 +257,7 @@ void WorldRenderer::renderScene(
   cmd_buf.bindIndexBuffer(sceneMgr->getIndexBuffer(), 0, vk::IndexType::eUint32);
 
   pushConst.projView = glob_tm;
+  pushConst.cameraPos = glm::vec4(cameraWorldPos, 0.0f);
   pushConst.isBaked = bakedEnabled ? 1u : 0u;
   pushConst.debugMode = static_cast<std::uint32_t>(debugMode);
 

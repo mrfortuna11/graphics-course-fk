@@ -13,6 +13,7 @@ layout(push_constant) uniform params_t
   mat4 mProjView;
   vec4 baseColorFactor;
   vec4 materialParams;
+  vec4 cameraPos;
   uint isBaked;
   uint debugMode;
 } params;
