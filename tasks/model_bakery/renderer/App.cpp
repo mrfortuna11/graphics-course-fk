@@ -2,6 +2,8 @@
 
 #include <tracy/Tracy.hpp>
 
+#include "gui/ImGuiRenderer.hpp"
+
 
 App::App()
 {
@@ -18,6 +20,8 @@ App::App()
   auto surface = mainWindow->createVkSurface(etna::get_context().getInstance());
 
   renderer->initFrameDelivery(std::move(surface), [this]() { return mainWindow->getResolution(); });
+
+  ImGuiRenderer::enableImGuiForWindow(mainWindow->native());
 
   mainCam.lookAt({0, 10, 10}, {0, 0, 0}, {0, 1, 0});
 

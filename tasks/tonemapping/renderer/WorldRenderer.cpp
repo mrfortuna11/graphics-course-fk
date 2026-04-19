@@ -5,6 +5,8 @@
 #include <etna/RenderTargetStates.hpp>
 #include <etna/Profiling.hpp>
 #include <glm/ext.hpp>
+#include <imgui.h>
+#include <spdlog/spdlog.h>
 
 WorldRenderer::WorldRenderer(const etna::GpuWorkCount& workCount)
   : sceneMgr{std::make_unique<SceneManager>()}
@@ -69,7 +71,7 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
   normalMap = ctx.createImage(etna::Image::CreateInfo{
     .extent = vk::Extent3D{4096, 4096, 1},
     .name = "normal_map",
-    .format = vk::Format::eR8G8B8A8Snorm,
+    .format = vk::Format::eR8G8B8A8Unorm,
     .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage});
 
   auto cmdManager = ctx.createOneShotCmdMgr();
@@ -275,6 +277,22 @@ void WorldRenderer::renderWorld(vk::CommandBuffer cmd_buf, vk::Image target_imag
     renderScene(cmd_buf, worldViewProj, staticMeshPipeline.getVkPipelineLayout());
   }
 
+  // Handle terrain regeneration if requested
+  if (terrainRegenerateRequested)
+  {
+    spdlog::info("Regenerating terrain...");
+    auto& ctx = etna::get_context();
+    auto cmdManager = ctx.createOneShotCmdMgr();
+    auto cmdBuf = cmdManager->start();
+    ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
+    createTerrainMap(cmdBuf);
+    ETNA_CHECK_VK_RESULT(cmdBuf.end());
+    cmdManager->submitAndWait(cmdBuf);
+    terrainRegenerateRequested = false;
+    spdlog::info("Terrain regenerated!");
+  }
+
+  // draw terrain only
   {
     ETNA_PROFILE_GPU(cmd_buf, renderTerrain);
     etna::RenderTargetState renderTargets(
@@ -449,8 +467,38 @@ void WorldRenderer::renderTerrain(vk::CommandBuffer cmd_buf)
     vk::ShaderStageFlagBits::eTessellationEvaluation |
       vk::ShaderStageFlagBits::eTessellationControl,
     0,
-    {TerrainPushConst{worldViewProj, eye}});
+    {TerrainPushConst{worldViewProj, eye, terrainHeightScale}});
 
 
   cmd_buf.draw(3, (4096 * 4096) / (128 * 128), 0, 0);
+}
+
+void WorldRenderer::drawGui()
+{
+  ImGui::Begin("Terrain Settings");
+
+  ImGui::SeparatorText("Terrain Generation");
+
+  ImGui::SliderFloat("Height Scale", &terrainHeightScale, 1.0f, 500.0f);
+
+  if (ImGui::Button("Regenerate Terrain", ImVec2(-1, 0)))
+  {
+    spdlog::info("Button pressed: Regenerate Terrain - setting flag");
+    terrainRegenerateRequested = true;
+  }
+
+  ImGui::NewLine();
+  ImGui::SeparatorText("Camera");
+  ImGui::Text("Camera position: (%.1f, %.1f, %.1f)", eye.x, eye.y, eye.z);
+
+  ImGui::NewLine();
+  ImGui::SeparatorText("Info");
+  ImGui::Text(
+    "Application average %.3f ms/frame (%.1f FPS)",
+    1000.0f / ImGui::GetIO().Framerate,
+    ImGui::GetIO().Framerate);
+
+  ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Press 'B' to recompile and reload shaders");
+
+  ImGui::End();
 }

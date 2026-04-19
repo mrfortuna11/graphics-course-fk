@@ -3,7 +3,11 @@
 #include <etna/Image.hpp>
 #include <etna/Sampler.hpp>
 #include <etna/Buffer.hpp>
+#include <etna/BlockingTransferHelper.hpp>
 #include <etna/GraphicsPipeline.hpp>
+#include <cstdint>
+#include <filesystem>
+#include <vector>
 #include <glm/glm.hpp>
 
 #include "scene/SceneManager.hpp"
@@ -15,9 +19,17 @@
 class WorldRenderer
 {
 public:
+  enum class SceneType
+  {
+    SimpleMeshes,
+    LowPolyDarkTown,
+    Avocado,
+  };
+
   WorldRenderer();
 
   void loadScene(std::filesystem::path path);
+  void loadSceneByType(SceneType type);
 
   void loadShaders();
   void allocateResources(glm::uvec2 swapchain_resolution);
@@ -30,26 +42,69 @@ public:
     vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view);
 
 private:
+  // Performs frustum culling and prepares instance data for rendering
+  struct CulledRenderElements
+  {
+    struct Element
+    {
+      std::size_t relemIdx;
+      std::vector<glm::mat4x4> visibleMatrices;
+    };
+    std::vector<Element> elements;
+  };
+
   void renderScene(
     vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout);
+
+  void performFrustumCulling(const glm::mat4x4& projView);
+
+  void prepareInstanceMatrices();
+
+  void uploadSceneTextures();
+
+  std::filesystem::path modifyPathForBaking(std::filesystem::path path) const;
 
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
 
   etna::Image mainViewDepth;
-  etna::Buffer constants;
+  std::unique_ptr<etna::BlockingTransferHelper> transferHelper;
+
+  // Buffers for instanced rendering and culling
+  etna::Buffer instanceMatricesBuffer;
+  CulledRenderElements culledElements;
 
   struct PushConstants
   {
     glm::mat4x4 projView;
-    glm::mat4x4 model;
-  } pushConst2M;
+    glm::vec4 baseColorFactor{1.f, 1.f, 1.f, 1.f};
+    // x=metallicFactor, y=roughnessFactor, z=normalScale, w=occlusionStrength
+    glm::vec4 materialParams{0.f, 1.f, 1.f, 1.f};
+    // xyz=world-space camera position (needed for Fresnel / view vector), w unused
+    glm::vec4 cameraPos{0.f, 0.f, 0.f, 0.f};
+    uint32_t isBaked{0};
+    uint32_t debugMode{0};
+  } pushConst;
 
   glm::mat4x4 worldViewProj;
-  glm::mat4x4 lightMatrix;
+  glm::vec3 cameraWorldPos{0.f};
 
   etna::GraphicsPipeline staticMeshPipeline{};
+  etna::Sampler albedoSampler{};
+  // All GPU images referenced by scene materials, indexed by TextureId
+  // Includes built-in fallback textures at the start of the array
+  std::vector<etna::Image> sceneTextures;
+
+  bool logEnabled = true;
+  std::uint32_t logFrameCounter = 0;
+
+  bool bakedEnabled = false;
+  SceneType selectedScene = SceneType::LowPolyDarkTown;
+  float imguiScale = 1.5f;
+
+  // 0=Shaded, 1=BaseColor, 2=Normal, 3=MetalRough, 4=Occlusion
+  int debugMode = 0;
 
   glm::uvec2 resolution;
 };
