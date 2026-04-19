@@ -25,6 +25,7 @@ layout(location = 0) in VS_OUT
   vec3 wNorm;
   vec3 wTangent;
   vec2 texCoord;
+  float tangentSign;
 } surf;
 
 void main()
@@ -37,11 +38,25 @@ void main()
   const vec3 albedo    = baseColorSample.rgb * params.baseColorFactor.rgb;
   const float metallic  = mrSample.b * params.materialParams.x;
   const float roughness = mrSample.g * params.materialParams.y;
+  const float normalScale = params.materialParams.z;
   const float ao        = mix(1.0, occlusionSample, params.materialParams.w);
+
+  // Reconstruct TBN only when tangentSign is a valid ±1 sentinel from glTF.
+  // tangent.w == 0 marks meshes without TANGENT data — fall back to geometric normal.
+  const vec3 N = normalize(surf.wNorm);
+  vec3 shadingNormal = N;
+  if (abs(surf.tangentSign) > 0.5)
+  {
+    const vec3 T = normalize(surf.wTangent - N * dot(N, surf.wTangent));
+    const vec3 B = cross(N, T) * surf.tangentSign;
+    vec3 nTs = normalSample * 2.0 - 1.0;
+    nTs.xy *= normalScale;
+    shadingNormal = normalize(mat3(T, B, N) * nTs);
+  }
 
   // Debug channels — raw previews of each material texture for validation.
   if (params.debugMode == 1u) { out_fragColor = vec4(albedo, 1.0); return; }
-  if (params.debugMode == 2u) { out_fragColor = vec4(normalSample, 1.0); return; }
+  if (params.debugMode == 2u) { out_fragColor = vec4(shadingNormal * 0.5 + 0.5, 1.0); return; }
   if (params.debugMode == 3u) { out_fragColor = vec4(metallic, roughness, 0.0, 1.0); return; }
   if (params.debugMode == 4u) { out_fragColor = vec4(vec3(ao), 1.0); return; }
 
@@ -49,7 +64,7 @@ void main()
   const vec3 wLightPos = vec3(20, 20, 20);
   const vec3 lightColor = vec3(1.0);
   const vec3 lightDir   = normalize(wLightPos - surf.wPos);
-  const float ndl = max(dot(surf.wNorm, lightDir), 0.0);
+  const float ndl = max(dot(shadingNormal, lightDir), 0.0);
   const float ambient = 0.05;
   out_fragColor.rgb = (ndl * lightColor + ambient) * albedo * ao;
   out_fragColor.a = 1.0;

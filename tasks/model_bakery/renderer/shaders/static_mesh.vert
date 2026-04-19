@@ -29,6 +29,7 @@ layout (location = 0 ) out VS_OUT
   vec3 wNorm;
   vec3 wTangent;
   vec2 texCoord;
+  float tangentSign;
 } vOut;
 
 out gl_PerVertex { vec4 gl_Position; };
@@ -43,6 +44,7 @@ void main(void)
   vOut.wNorm  = normalize(mat3(transpose(inverse(modelTm))) * wNorm.xyz);
   vOut.wTangent = normalize(mat3(transpose(inverse(modelTm))) * wTang.xyz);
   vOut.texCoord = vTexCoordAndTang.xy;
+  vOut.tangentSign = vTexCoordAndTang.w;
 
   gl_Position   = params.mProjView * vec4(vOut.wPos, 1.0);
 }

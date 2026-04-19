@@ -639,7 +639,7 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
         // NOTE: if tangents are not available, one could use http://mikktspace.com/
         // NOTE: if normals are not available, reconstructing them is possible but will look ugly
         glm::vec3 normal{0};
-        glm::vec3 tangent{0};
+        glm::vec4 tangent{0, 0, 0, 0}; // w==0 means "no tangent", shader will fall back to geometric normal
         glm::vec2 texcoord{0};
         std::memcpy(&pos, ptrs[1], sizeof(pos));
 
@@ -654,8 +654,8 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
 
 
         vtx.positionAndNormal = glm::vec4(pos, std::bit_cast<float>(encode_normal(normal)));
-        vtx.texCoordAndTangentAndPadding =
-          glm::vec4(texcoord, std::bit_cast<float>(encode_normal(tangent)), 0);
+        vtx.texCoordAndTangentAndPadding = glm::vec4(
+          texcoord, std::bit_cast<float>(encode_normal(glm::vec3(tangent))), tangent.w);
 
         ptrs[1] += strides[1];
         if (hasNormals)
