@@ -1,0 +1,67 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "luminance_common.glsl"
+
+// One thread per HDR pixel; 16x16 workgroup then reduces via shared memory to
+// a single pair (min, max) and does a single atomic per workgroup.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer LuminanceStats
+{
+  uint  minLogLumBits;
+  uint  maxLogLumBits;
+  uint  histogram[HISTOGRAM_BINS];
+  float smoothedExposure;
+} stats;
+
+layout(set = 0, binding = 1) uniform sampler2D hdrImage;
+
+shared float s_min[256];
+shared float s_max[256];
+
+void main()
+{
+  const uint lid = gl_LocalInvocationIndex;
+  const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+  const ivec2 size = textureSize(hdrImage, 0);
+
+  // Out-of-bounds threads contribute neutral sentinels that lose every reduction step.
+  float logLumMin = +1e30;
+  float logLumMax = -1e30;
+
+  if (pix.x < size.x && pix.y < size.y)
+  {
+    vec3 col = texelFetch(hdrImage, pix, 0).rgb;
+    float lum = compute_luminance(col);
+    // clamp to the representable range to keep atomic packing safe.
+    float logLum = clamp(log2(max(lum, 1e-6)), -LOG_LUM_OFFSET, LOG_LUM_OFFSET);
+    logLumMin = logLum;
+    logLumMax = logLum;
+  }
+
+  s_min[lid] = logLumMin;
+  s_max[lid] = logLumMax;
+  barrier();
+
+  // Tree reduction over 256 elements: 128 → 64 → 32 → ... → 1.
+  for (uint stride = 128u; stride > 0u; stride >>= 1u)
+  {
+    if (lid < stride)
+    {
+      s_min[lid] = min(s_min[lid], s_min[lid + stride]);
+      s_max[lid] = max(s_max[lid], s_max[lid + stride]);
+    }
+    barrier();
+  }
+
+  if (lid == 0u)
+  {
+    // Shift to [0, LOG_LUM_RANGE] so floatBitsToUint of a positive float is monotonic,
+    // which makes atomicMin/atomicMax on the bit pattern correct.
+    uint minBits = floatBitsToUint(clamp(s_min[0] + LOG_LUM_OFFSET, 0.0, LOG_LUM_RANGE));
+    uint maxBits = floatBitsToUint(clamp(s_max[0] + LOG_LUM_OFFSET, 0.0, LOG_LUM_RANGE));
+    atomicMin(stats.minLogLumBits, minBits);
+    atomicMax(stats.maxLogLumBits, maxBits);
+  }
+}

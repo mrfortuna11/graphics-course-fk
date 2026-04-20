@@ -5,6 +5,7 @@
 #include <etna/Buffer.hpp>
 #include <etna/BlockingTransferHelper.hpp>
 #include <etna/GraphicsPipeline.hpp>
+#include <etna/ComputePipeline.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -67,8 +68,10 @@ private:
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
-
+  
   etna::Image mainViewDepth;
+  etna::Image hdrTarget;
+  etna::Sampler hdrSampler;
   std::unique_ptr<etna::BlockingTransferHelper> transferHelper;
 
   // Buffers for instanced rendering and culling
@@ -90,7 +93,29 @@ private:
   glm::mat4x4 worldViewProj;
   glm::vec3 cameraWorldPos{0.f};
 
+  float previousTime = 0.f;
+  float deltaTime = 0.f;
+
+  // Adaptive-exposure tuning (exposed via ImGui later).
+  float adaptationSpeed = 2.5f;
+  float keyValue = 0.18f;
+  float minExposure = 0.01f;
+  float maxExposure = 100.f;
+  int tonemapMode = 1; // 0 Reinhard, 1 ACES, 2 None
+
+  // Sun direction shared between sky and main BRDF for visual consistency.
+  glm::vec3 sunDirection{20.f, 20.f, 20.f};
+  glm::vec3 sunColor{1.0f, 0.95f, 0.85f};
+  float sunIntensity = 3.0f;
+
   etna::GraphicsPipeline staticMeshPipeline{};
+  etna::GraphicsPipeline postprocessPipeline{};
+  etna::Buffer luminanceStatsBuffer;
+  etna::ComputePipeline clearStatsPipeline{};
+  etna::ComputePipeline minmaxPipeline{};
+  etna::ComputePipeline histogramPipeline{};
+  etna::ComputePipeline reducePipeline{};
+  etna::GraphicsPipeline skyboxPipeline{};
   etna::Sampler albedoSampler{};
   // All GPU images referenced by scene materials, indexed by TextureId
   // Includes built-in fallback textures at the start of the array

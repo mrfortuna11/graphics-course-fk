@@ -1,0 +1,56 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "luminance_common.glsl"
+
+// 16x16 workgroup. Each thread bins one HDR pixel into a shared-memory local histogram,
+// then one global atomicAdd per bin per workgroup keeps global contention low
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer LuminanceStats
+{
+  uint  minLogLumBits;
+  uint  maxLogLumBits;
+  uint  histogram[HISTOGRAM_BINS];
+  float smoothedExposure;
+} stats;
+
+layout(set = 0, binding = 1) uniform sampler2D hdrImage;
+
+shared uint s_hist[HISTOGRAM_BINS];
+
+void main()
+{
+  const uint lid = gl_LocalInvocationIndex;
+
+  // Clear shared histogram. 16x16 = 256 threads, 128 bins → first 128 threads do it
+  if (lid < HISTOGRAM_BINS)
+    s_hist[lid] = 0u;
+  barrier();
+
+  // Decode global min/max log-luminance
+  float minLog = uintBitsToFloat(stats.minLogLumBits) - LOG_LUM_OFFSET;
+  float maxLog = uintBitsToFloat(stats.maxLogLumBits) - LOG_LUM_OFFSET;
+  float range = max(maxLog - minLog, 1e-4);
+
+  const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+  const ivec2 size = textureSize(hdrImage, 0);
+
+  if (pix.x < size.x && pix.y < size.y)
+  {
+    vec3 col = texelFetch(hdrImage, pix, 0).rgb;
+    float lum = compute_luminance(col);
+
+    if (lum > 0.005)
+    {
+      float logLum = clamp(log2(lum), -LOG_LUM_OFFSET, LOG_LUM_OFFSET);
+      float t = clamp((logLum - minLog) / range, 0.0, 0.9999);
+      uint bin = uint(t * float(HISTOGRAM_BINS));
+      atomicAdd(s_hist[bin], 1u);
+    }
+  }
+  barrier();
+
+  if (lid < HISTOGRAM_BINS && s_hist[lid] > 0u)
+    atomicAdd(stats.histogram[lid], s_hist[lid]);
+}

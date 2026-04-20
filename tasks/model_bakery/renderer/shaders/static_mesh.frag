@@ -60,12 +60,12 @@ void main()
   if (params.debugMode == 3u) { out_fragColor = vec4(metallic, roughness, 0.0, 1.0); return; }
   if (params.debugMode == 4u) { out_fragColor = vec4(vec3(ao), 1.0); return; }
 
-  // GGX metallic-roughness BRDF 
-  const vec3 wLightPos = vec3(20, 20, 20);
-  const vec3 lightColor = vec3(3.0); // slightly punchy directional for now
+  // GGX metallic-roughness BRDF
+  const vec3 sunDir   = normalize(vec3(20.0, 20.0, 20.0));
+  const vec3 lightColor = vec3(1.0, 0.95, 0.85) * 3.0;
   const vec3 sN = shadingNormal;
   const vec3 V = normalize(params.cameraPos.xyz - surf.wPos);
-  const vec3 L = normalize(wLightPos - surf.wPos);
+  const vec3 L = sunDir;
   const vec3 H = normalize(V + L);
 
   const float NdotL = max(dot(sN, L), 0.0);
@@ -98,9 +98,28 @@ void main()
 
   const vec3 Lo = (diffuse + specular) * lightColor * NdotL;
 
-  // Temporary constant ambient until IBL lands
-  const vec3 ambient = vec3(0.03) * albedo * ao;
+  // Hemispheric ambient: cheap stand-in for IBL
+  const vec3 SKY_ZENITH  = vec3(0.18, 0.32, 0.70);
+  const vec3 SKY_HORIZON = vec3(0.78, 0.86, 0.95);
+  const vec3 SKY_GROUND  = vec3(0.18, 0.16, 0.14);
+  vec3 skyAmbient = sN.y >= 0.0
+    ? mix(SKY_HORIZON, SKY_ZENITH, smoothstep(0.0, 0.55, sN.y))
+    : mix(SKY_HORIZON, SKY_GROUND, smoothstep(0.0, 0.30, -sN.y));
 
-  out_fragColor.rgb = ambient + Lo;
+  // Energy-conservative diffuse ambient: metals get no diffuse contribution
+  vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+  vec3 ambient = skyAmbient * albedo * kD * ao * 0.5;
+
+  // Crude specular ambient: reflect view dir, sample sky in that direction
+  vec3 R = reflect(-V, sN);
+  vec3 skyRefl = R.y >= 0.0
+    ? mix(SKY_HORIZON, SKY_ZENITH, smoothstep(0.0, 0.55, R.y))
+    : mix(SKY_HORIZON, SKY_GROUND, smoothstep(0.0, 0.30, -R.y));
+  // Schlick Fresnel against view (for ambient we don't have a half-vector)
+  float NdotV0 = max(dot(sN, V), 0.0);
+  vec3 Fa = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV0, 5.0);
+  vec3 ambientSpec = skyRefl * Fa * ao * (1.0 - roughness * 0.7);
+
+  out_fragColor.rgb = ambient + ambientSpec + Lo;
   out_fragColor.a = 1.0;
 }

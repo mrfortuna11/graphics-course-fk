@@ -30,6 +30,21 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
   });
 
+  // HDR render target: 11/11/10 float packed into 32 bits. Enough dynamic range for
+  // tone mapping experiments while staying compact in memory / bandwidth.
+  hdrTarget = ctx.createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+    .name = "hdr_target",
+    .format = vk::Format::eB10G11R11UfloatPack32,
+    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+  });
+
+  hdrSampler = etna::Sampler(etna::Sampler::CreateInfo{
+    .filter = vk::Filter::eLinear,
+    .addressMode = vk::SamplerAddressMode::eClampToEdge,
+    .name = "hdr_sampler",
+  });
+
   transferHelper = std::make_unique<etna::BlockingTransferHelper>(
     etna::BlockingTransferHelper::CreateInfo{.stagingSize = 4u * 1024u * 1024u});
 
@@ -44,6 +59,17 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
     .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
     .name = "instanceMatrices",
+  });
+
+  // Persistent luminance-stats buffer: matches LuminanceStats in luminance_common.glsl.
+  // Layout: uint minBits, uint maxBits, uint histogram[128], float smoothedExposure.
+  constexpr vk::DeviceSize LUMINANCE_STATS_BYTES =
+    sizeof(std::uint32_t) * 2u + sizeof(std::uint32_t) * 128u + sizeof(float);
+  luminanceStatsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
+    .size = LUMINANCE_STATS_BYTES,
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+    .name = "luminance_stats",
   });
 }
 
@@ -125,6 +151,25 @@ void WorldRenderer::loadShaders()
     {MODEL_BAKERY_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
      MODEL_BAKERY_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
   etna::create_program("static_mesh", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+
+  etna::create_program(
+    "postprocess",
+    {MODEL_BAKERY_RENDERER_SHADERS_ROOT "postprocess.vert.spv",
+     MODEL_BAKERY_RENDERER_SHADERS_ROOT "postprocess.frag.spv"});
+
+  etna::create_program(
+    "clear_stats", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "clear_stats.comp.spv"});
+  etna::create_program(
+    "minmax", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "minmax.comp.spv"});
+  etna::create_program(
+    "histogram", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "histogram.comp.spv"});
+  etna::create_program(
+    "reduce", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "reduce.comp.spv"});
+
+  etna::create_program(
+    "skybox",
+    {MODEL_BAKERY_RENDERER_SHADERS_ROOT "skybox.vert.spv",
+     MODEL_BAKERY_RENDERER_SHADERS_ROOT "skybox.frag.spv"});
 }
 
 void WorldRenderer::setupPipelines(vk::Format swapchain_format)
@@ -151,7 +196,47 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
         },
       .fragmentShaderOutput =
         {
+          .colorAttachmentFormats = {vk::Format::eB10G11R11UfloatPack32},
+          .depthAttachmentFormat = vk::Format::eD32Sfloat,
+        },
+    });
+
+  postprocessPipeline = pipelineManager.createGraphicsPipeline(
+    "postprocess",
+    etna::GraphicsPipeline::CreateInfo{
+      .fragmentShaderOutput =
+        {
           .colorAttachmentFormats = {swapchain_format},
+        },
+    });
+
+  clearStatsPipeline = pipelineManager.createComputePipeline("clear_stats", {});
+  minmaxPipeline = pipelineManager.createComputePipeline("minmax", {});
+  histogramPipeline = pipelineManager.createComputePipeline("histogram", {});
+  reducePipeline = pipelineManager.createComputePipeline("reduce", {});
+
+  // Skybox: depth test enabled, depth write OFF. Vertex shader puts the
+  // fullscreen tri at z = 1, so it only passes where nothing was drawn
+  skyboxPipeline = pipelineManager.createGraphicsPipeline(
+    "skybox",
+    etna::GraphicsPipeline::CreateInfo{
+      .rasterizationConfig =
+        vk::PipelineRasterizationStateCreateInfo{
+          .polygonMode = vk::PolygonMode::eFill,
+          .cullMode = vk::CullModeFlagBits::eNone,
+          .frontFace = vk::FrontFace::eCounterClockwise,
+          .lineWidth = 1.f,
+        },
+      .depthConfig =
+        vk::PipelineDepthStencilStateCreateInfo{
+          .depthTestEnable = vk::True,
+          .depthWriteEnable = vk::False,
+          .depthCompareOp = vk::CompareOp::eLessOrEqual,
+          .maxDepthBounds = 1.f,
+        },
+      .fragmentShaderOutput =
+        {
+          .colorAttachmentFormats = {vk::Format::eB10G11R11UfloatPack32},
           .depthAttachmentFormat = vk::Format::eD32Sfloat,
         },
     });
@@ -169,6 +254,13 @@ void WorldRenderer::update(const FramePacket& packet)
     worldViewProj = packet.mainCam.projTm(aspect) * packet.mainCam.viewTm();
     cameraWorldPos = packet.mainCam.position;
   }
+
+  // Track frame delta for temporal exposure smoothing.
+  if (previousTime <= 0.f)
+    deltaTime = 1.f / 60.f;
+  else
+    deltaTime = std::max(packet.currentTime - previousTime, 0.f);
+  previousTime = packet.currentTime;
 }
 
 void WorldRenderer::performFrustumCulling(const glm::mat4x4& projView)
@@ -363,19 +455,223 @@ void WorldRenderer::renderWorld(
 
   prepareInstanceMatrices();
 
-  // draw final scene to screen
+  // Render the world into the HDR offscreen target
   {
     ETNA_PROFILE_GPU(cmd_buf, renderForward);
 
     etna::RenderTargetState renderTargets(
       cmd_buf,
       {{0, 0}, {resolution.x, resolution.y}},
-      {{.image = target_image, .view = target_image_view}},
+      {{.image = hdrTarget.get(), .view = hdrTarget.getView({})}},
       {.image = mainViewDepth.get(), .view = mainViewDepth.getView({})});
 
     cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, staticMeshPipeline.getVkPipeline());
 
     renderScene(cmd_buf, worldViewProj, staticMeshPipeline.getVkPipelineLayout());
+
+    {
+      ETNA_PROFILE_GPU(cmd_buf, skybox);
+
+      struct SkyPush
+      {
+        glm::mat4 invProjView;
+        glm::vec4 cameraPos;
+        glm::vec4 sunDir;
+        glm::vec4 sunColor;
+      } skyPush{
+        glm::inverse(worldViewProj),
+        glm::vec4(cameraWorldPos, 0.f),
+        glm::vec4(glm::normalize(sunDirection), 0.f),
+        glm::vec4(sunColor, sunIntensity),
+      };
+
+      const auto skyLayout = skyboxPipeline.getVkPipelineLayout();
+      cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, skyboxPipeline.getVkPipeline());
+      cmd_buf.pushConstants<SkyPush>(
+        skyLayout,
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        0,
+        {skyPush});
+      cmd_buf.draw(3, 1, 0, 0);
+    }
+  }
+
+  // Adaptive-exposure compute: transition HDR once for sampling in compute + frag
+  etna::set_state(
+    cmd_buf,
+    hdrTarget.get(),
+    vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(cmd_buf);
+
+  // Clear per-frame stats (histogram zeros + min/max seeds)
+  {
+    ETNA_PROFILE_GPU(cmd_buf, clearStats);
+
+    auto info = etna::get_shader_program("clear_stats");
+    auto statsBind = luminanceStatsBuffer.genBinding();
+    auto descSet = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, statsBind}});
+    vk::DescriptorSet vkSet = descSet.getVkSet();
+
+    cmd_buf.bindPipeline(
+      vk::PipelineBindPoint::eCompute, clearStatsPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      clearStatsPipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+    cmd_buf.dispatch(1, 1, 1);
+  }
+
+  // Barrier: clear writes → minmax reads/writes
+  etna::set_state(
+    cmd_buf,
+    luminanceStatsBuffer.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+  etna::flush_barriers(cmd_buf);
+
+  // Min/max log-luminance via shared-memory reduction
+  {
+    ETNA_PROFILE_GPU(cmd_buf, minmax);
+
+    auto info = etna::get_shader_program("minmax");
+    auto statsBind = luminanceStatsBuffer.genBinding();
+    auto hdrBind = hdrTarget.genBinding(
+      hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+    auto descSet = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0),
+      cmd_buf,
+      {etna::Binding{0, statsBind}, etna::Binding{1, hdrBind}});
+    vk::DescriptorSet vkSet = descSet.getVkSet();
+
+    cmd_buf.bindPipeline(
+      vk::PipelineBindPoint::eCompute, minmaxPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      minmaxPipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+
+    const uint32_t groupsX = (resolution.x + 15u) / 16u;
+    const uint32_t groupsY = (resolution.y + 15u) / 16u;
+    cmd_buf.dispatch(groupsX, groupsY, 1);
+  }
+
+  // Barrier: minmax writes → histogram reads/writes
+  etna::set_state(
+    cmd_buf,
+    luminanceStatsBuffer.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+  etna::flush_barriers(cmd_buf);
+
+  // Histogram: bin every HDR pixel into 128 log-luminance buckets
+  {
+    ETNA_PROFILE_GPU(cmd_buf, histogram);
+
+    auto info = etna::get_shader_program("histogram");
+    auto statsBind = luminanceStatsBuffer.genBinding();
+    auto hdrBind = hdrTarget.genBinding(
+      hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+    auto descSet = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0),
+      cmd_buf,
+      {etna::Binding{0, statsBind}, etna::Binding{1, hdrBind}});
+    vk::DescriptorSet vkSet = descSet.getVkSet();
+
+    cmd_buf.bindPipeline(
+      vk::PipelineBindPoint::eCompute, histogramPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      histogramPipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+
+    const uint32_t groupsX = (resolution.x + 15u) / 16u;
+    const uint32_t groupsY = (resolution.y + 15u) / 16u;
+    cmd_buf.dispatch(groupsX, groupsY, 1);
+  }
+
+  // Barrier: histogram writes → reduce reads/writes
+  etna::set_state(
+    cmd_buf,
+    luminanceStatsBuffer.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+  etna::flush_barriers(cmd_buf);
+
+  // Reduce: weighted-average log-luminance → exposure → temporal smoothing
+  {
+    ETNA_PROFILE_GPU(cmd_buf, reduce);
+
+    struct ReducePush
+    {
+      float deltaTime;
+      float adaptationSpeed;
+      float keyValue;
+      float minExposure;
+      float maxExposure;
+    } reducePush{deltaTime, adaptationSpeed, keyValue, minExposure, maxExposure};
+
+    auto info = etna::get_shader_program("reduce");
+    auto statsBind = luminanceStatsBuffer.genBinding();
+    auto descSet = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, statsBind}});
+    vk::DescriptorSet vkSet = descSet.getVkSet();
+
+    cmd_buf.bindPipeline(
+      vk::PipelineBindPoint::eCompute, reducePipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      reducePipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+    cmd_buf.pushConstants<ReducePush>(
+      reducePipeline.getVkPipelineLayout(),
+      vk::ShaderStageFlagBits::eCompute,
+      0,
+      {reducePush});
+    cmd_buf.dispatch(1, 1, 1);
+  }
+
+  // Barrier: reduce writes smoothedExposure → frag reads it
+  etna::set_state(
+    cmd_buf,
+    luminanceStatsBuffer.get(),
+    vk::PipelineStageFlagBits2::eFragmentShader,
+    vk::AccessFlagBits2::eShaderStorageRead);
+  etna::flush_barriers(cmd_buf);
+
+  // Post-process pass: sample HDR, apply exposure + tonemap, write to LDR swapchain
+  {
+    ETNA_PROFILE_GPU(cmd_buf, postProcess);
+
+    etna::RenderTargetState renderTargets(
+      cmd_buf,
+      {{0, 0}, {resolution.x, resolution.y}},
+      {{.image = target_image, .view = target_image_view}},
+      {});
+
+    auto programInfo = etna::get_shader_program("postprocess");
+    auto hdrBinding =
+      hdrTarget.genBinding(hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+    auto statsBinding = luminanceStatsBuffer.genBinding();
+    auto descSet = etna::create_descriptor_set(
+      programInfo.getDescriptorLayoutId(0),
+      cmd_buf,
+      {etna::Binding{0, hdrBinding}, etna::Binding{1, statsBinding}});
+
+    vk::DescriptorSet vkSet = descSet.getVkSet();
+    const auto layout = postprocessPipeline.getVkPipelineLayout();
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, postprocessPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+
+    const std::uint32_t tonemapModeU = static_cast<std::uint32_t>(tonemapMode);
+    cmd_buf.pushConstants<std::uint32_t>(
+      layout, vk::ShaderStageFlagBits::eFragment, 0, {tonemapModeU});
+
+    cmd_buf.draw(3, 1, 0, 0);
   }
 }
 
@@ -449,6 +745,15 @@ void WorldRenderer::drawGui()
   const char* debugModes[] = {
     "Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
   ImGui::Combo("Debug view", &debugMode, debugModes, IM_ARRAYSIZE(debugModes));
+
+  ImGui::Separator();
+  ImGui::Text("Adaptive exposure");
+  const char* tonemaps[] = {"Reinhard", "ACES", "None (clamp)"};
+  ImGui::Combo("Tonemap", &tonemapMode, tonemaps, IM_ARRAYSIZE(tonemaps));
+  ImGui::SliderFloat("Adaptation speed", &adaptationSpeed, 0.1f, 10.f, "%.2f");
+  ImGui::SliderFloat("Key value", &keyValue, 0.01f, 1.0f, "%.3f");
+  ImGui::SliderFloat("Min exposure", &minExposure, 0.001f, 1.f, "%.3f");
+  ImGui::SliderFloat("Max exposure", &maxExposure, 1.f, 1000.f, "%.1f");
 
   ImGui::Text(
     "Application average %.1f ms/frame (%.1f FPS)",
