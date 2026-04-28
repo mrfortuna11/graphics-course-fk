@@ -30,8 +30,6 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
   });
 
-  // HDR render target: 11/11/10 float packed into 32 bits. Enough dynamic range for
-  // tone mapping experiments while staying compact in memory / bandwidth.
   hdrTarget = ctx.createImage(etna::Image::CreateInfo{
     .extent = vk::Extent3D{resolution.x, resolution.y, 1},
     .name = "hdr_target",
@@ -61,8 +59,14 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .name = "instanceMatrices",
   });
 
-  // Persistent luminance-stats buffer: matches LuminanceStats in luminance_common.glsl.
-  // Layout: uint minBits, uint maxBits, uint histogram[128], float smoothedExposure.
+  const vk::DeviceSize maxRelemMatsBytes = 20000u * sizeof(RelemMat);
+  relemMaterialsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
+    .size = maxRelemMatsBytes,
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+    .name = "relemMaterials",
+  });
+
   constexpr vk::DeviceSize LUMINANCE_STATS_BYTES =
     sizeof(std::uint32_t) * 2u + sizeof(std::uint32_t) * 128u + sizeof(float);
   luminanceStatsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
@@ -142,34 +146,92 @@ void WorldRenderer::uploadSceneTextures()
     withMetalRough,
     withNormal,
     withOcclusion);
+
+  {
+    auto relems = sceneMgr->getRenderElements();
+    std::vector<RelemMat> cpuMats;
+    cpuMats.reserve(relems.size());
+
+    auto resolveIdx = [&](TextureId id, TextureId fallback) -> uint32_t {
+      const auto idx = static_cast<uint32_t>(id);
+      if (idx < sceneTextures.size())
+        return idx;
+      return static_cast<uint32_t>(fallback);
+    };
+
+    for (const auto& relem : relems)
+    {
+      const auto matIdx = static_cast<uint32_t>(relem.materialId);
+      const auto& m = materials[matIdx < materials.size() ? matIdx : 0u];
+
+      cpuMats.push_back(RelemMat{
+        .baseColorIdx = resolveIdx(m.baseColorTex, TextureId::DefaultBaseColor),
+        .metalRoughIdx = resolveIdx(m.metallicRoughnessTex, TextureId::DefaultMetallicRoughness),
+        .normalIdx = resolveIdx(m.normalTex, TextureId::DefaultNormal),
+        .occlusionIdx = resolveIdx(m.occlusionTex, TextureId::DefaultOcclusion),
+        .baseColorFactor = m.baseColorFactor,
+        .materialParams = glm::vec4(
+          m.metallicFactor, m.roughnessFactor, m.normalScale, m.occlusionStrength),
+      });
+    }
+
+    if (!cpuMats.empty())
+    {
+      auto oneShotMat = ctx.createOneShotCmdMgr();
+      transferHelper->uploadBuffer<RelemMat>(
+        *oneShotMat,
+        relemMaterialsBuffer,
+        0,
+        std::span<const RelemMat>(cpuMats));
+    }
+  }
+
+  {
+    auto programInfo = etna::get_shader_program("static_mesh_material");
+    auto layoutId    = programInfo.getDescriptorLayoutId(2);
+
+    std::vector<etna::Binding> texBindings;
+    texBindings.reserve(sceneTextures.size());
+    for (uint32_t i = 0; i < static_cast<uint32_t>(sceneTextures.size()); ++i)
+    {
+      texBindings.emplace_back(
+        0u,
+        sceneTextures[i].genBinding(albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal),
+        i);
+    }
+
+    bindlessTextureSet =
+      etna::get_context().getPersistentDescriptorPool().allocateSet(
+        layoutId, std::move(texBindings), /*allow_unbound_slots=*/true);
+  }
 }
 
 void WorldRenderer::loadShaders()
 {
   etna::create_program(
     "static_mesh_material",
-    {MODEL_BAKERY_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
-     MODEL_BAKERY_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
-  etna::create_program("static_mesh", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+  etna::create_program("static_mesh", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
 
   etna::create_program(
     "postprocess",
-    {MODEL_BAKERY_RENDERER_SHADERS_ROOT "postprocess.vert.spv",
-     MODEL_BAKERY_RENDERER_SHADERS_ROOT "postprocess.frag.spv"});
+    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "postprocess.vert.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "postprocess.frag.spv"});
 
   etna::create_program(
-    "clear_stats", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "clear_stats.comp.spv"});
+    "clear_stats", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clear_stats.comp.spv"});
   etna::create_program(
-    "minmax", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "minmax.comp.spv"});
+    "minmax", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "minmax.comp.spv"});
   etna::create_program(
-    "histogram", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "histogram.comp.spv"});
+    "histogram", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "histogram.comp.spv"});
   etna::create_program(
-    "reduce", {MODEL_BAKERY_RENDERER_SHADERS_ROOT "reduce.comp.spv"});
+    "reduce", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "reduce.comp.spv"});
 
   etna::create_program(
     "skybox",
-    {MODEL_BAKERY_RENDERER_SHADERS_ROOT "skybox.vert.spv",
-     MODEL_BAKERY_RENDERER_SHADERS_ROOT "skybox.frag.spv"});
+    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "skybox.vert.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "skybox.frag.spv"});
 }
 
 void WorldRenderer::setupPipelines(vk::Format swapchain_format)
@@ -353,10 +415,9 @@ void WorldRenderer::renderScene(
   pushConst.isBaked = bakedEnabled ? 1u : 0u;
   pushConst.debugMode = static_cast<std::uint32_t>(debugMode);
 
-  auto relems = sceneMgr->getRenderElements();
-  auto materials = sceneMgr->getMaterials();
   auto programInfo = etna::get_shader_program("static_mesh_material");
 
+  // Set 0: instance matrices (per-frame).
   auto instanceSet = etna::create_descriptor_set(
     programInfo.getDescriptorLayoutId(0),
     cmd_buf,
@@ -364,12 +425,20 @@ void WorldRenderer::renderScene(
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, {instanceSet.getVkSet()}, {});
 
-  auto resolveTex = [&](TextureId id, TextureId fallback) -> const etna::Image& {
-    const auto idx = static_cast<std::uint32_t>(id);
-    if (idx < sceneTextures.size())
-      return sceneTextures[idx];
-    return sceneTextures[static_cast<std::uint32_t>(fallback)];
-  };
+  // Set 1: RelemMaterials SSBO — bound once for the whole scene.
+  auto materialsSet = etna::create_descriptor_set(
+    programInfo.getDescriptorLayoutId(1),
+    cmd_buf,
+    {etna::Binding{0, relemMaterialsBuffer.genBinding()}});
+  cmd_buf.bindDescriptorSets(
+    vk::PipelineBindPoint::eGraphics, pipeline_layout, 1, {materialsSet.getVkSet()}, {});
+
+  // Set 2: bindless texture array — persistent, bound once.
+  vk::DescriptorSet bindlessVkSet = bindlessTextureSet.getVkSet();
+  cmd_buf.bindDescriptorSets(
+    vk::PipelineBindPoint::eGraphics, pipeline_layout, 2, {bindlessVkSet}, {});
+
+  auto relems = sceneMgr->getRenderElements();
 
   uint32_t instanceOffset = 0;
   for (const auto& element : culledElements.elements)
@@ -377,53 +446,13 @@ void WorldRenderer::renderScene(
     const auto& relem = relems[element.relemIdx];
     const uint32_t instanceCount = static_cast<uint32_t>(element.visibleMatrices.size());
 
-    const auto matIdx = static_cast<std::uint32_t>(relem.materialId);
-    const auto& material = materials[matIdx < materials.size() ? matIdx : 0u];
-
-    pushConst.baseColorFactor = material.baseColorFactor;
-    pushConst.materialParams = glm::vec4(
-      material.metallicFactor,
-      material.roughnessFactor,
-      material.normalScale,
-      material.occlusionStrength);
+    // Only relemIdx changes per draw — no per-relem descriptor-set updates.
+    pushConst.relemIdx = static_cast<uint32_t>(element.relemIdx);
     cmd_buf.pushConstants<PushConstants>(
       pipeline_layout,
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
       0,
       {pushConst});
-
-    const auto& baseColorImg =
-      resolveTex(material.baseColorTex, TextureId::DefaultBaseColor);
-    const auto& metalRoughImg =
-      resolveTex(material.metallicRoughnessTex, TextureId::DefaultMetallicRoughness);
-    const auto& normalImg = resolveTex(material.normalTex, TextureId::DefaultNormal);
-    const auto& occlusionImg =
-      resolveTex(material.occlusionTex, TextureId::DefaultOcclusion);
-
-    auto materialSet = etna::create_descriptor_set(
-      programInfo.getDescriptorLayoutId(1),
-      cmd_buf,
-      {
-        etna::Binding{
-          0,
-          baseColorImg.genBinding(
-            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
-        etna::Binding{
-          1,
-          metalRoughImg.genBinding(
-            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
-        etna::Binding{
-          2,
-          normalImg.genBinding(
-            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
-        etna::Binding{
-          3,
-          occlusionImg.genBinding(
-            albedoSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal)},
-      });
-
-    cmd_buf.bindDescriptorSets(
-      vk::PipelineBindPoint::eGraphics, pipeline_layout, 1, {materialSet.getVkSet()}, {});
 
     cmd_buf.drawIndexed(
       relem.indexCount, instanceCount, relem.indexOffset, relem.vertexOffset, instanceOffset);

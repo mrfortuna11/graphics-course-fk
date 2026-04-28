@@ -25,12 +25,28 @@ void Renderer::initVulkan(std::span<const char*> instance_extensions)
 
   deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
+  // Descriptor indexing — bindless texture array
+  static vk::PhysicalDeviceVulkan12Features vulkan12Features{
+    .shaderSampledImageArrayNonUniformIndexing = vk::True,
+    .descriptorBindingPartiallyBound = vk::True,
+    .descriptorBindingVariableDescriptorCount = vk::True,
+    .runtimeDescriptorArray = vk::True,
+  };
+  // shaderDrawParameters 
+  static vk::PhysicalDeviceVulkan11Features vulkan11Features{
+    .pNext = &vulkan12Features,
+    .shaderDrawParameters = vk::True,
+  };
+
   etna::initialize(etna::InitParams{
-    .applicationName = "model_bakery_renderer",
+    .applicationName = "bindless_and_pbr_renderer",
     .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
     .instanceExtensions = instanceExtensions,
     .deviceExtensions = deviceExtensions,
-    .features = vk::PhysicalDeviceFeatures2{.features = {}},
+    .features = vk::PhysicalDeviceFeatures2{
+      .pNext = &vulkan11Features,
+      .features = {.multiDrawIndirect = vk::True},
+    },
     .physicalDeviceIndexOverride = {},
     .numFramesInFlight = 2,
   });
@@ -80,7 +96,7 @@ void Renderer::debugInput(const Keyboard& kb)
   if (kb[KeyboardKey::kB] == ButtonState::Falling)
   {
     const int retval = std::system("cd " GRAPHICS_COURSE_ROOT "/build"
-                                   " && cmake --build . --target model_bakery_renderer_shaders");
+                                   " && cmake --build . --target bindless_and_pbr_renderer_shaders");
     if (retval != 0)
       spdlog::warn("Shader recompilation returned a non-zero return code!");
     else

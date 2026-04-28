@@ -81,14 +81,29 @@ private:
   struct PushConstants
   {
     glm::mat4x4 projView;
-    glm::vec4 baseColorFactor{1.f, 1.f, 1.f, 1.f};
-    // x=metallicFactor, y=roughnessFactor, z=normalScale, w=occlusionStrength
-    glm::vec4 materialParams{0.f, 1.f, 1.f, 1.f};
     // xyz=world-space camera position (needed for Fresnel / view vector), w unused
     glm::vec4 cameraPos{0.f, 0.f, 0.f, 0.f};
     uint32_t isBaked{0};
     uint32_t debugMode{0};
+    uint32_t relemIdx{0};
   } pushConst;
+
+  // GPU-side material table: one entry per render element (all relems in the scene).
+  // Filled once at scene load; contains texture indices + factor overrides.
+  struct RelemMat
+  {
+    uint32_t baseColorIdx;
+    uint32_t metalRoughIdx;
+    uint32_t normalIdx;
+    uint32_t occlusionIdx;
+    glm::vec4 baseColorFactor;
+    glm::vec4 materialParams;
+  };
+  etna::Buffer relemMaterialsBuffer;
+
+  // Persistent bindless descriptor set — one binding with all scene textures.
+  // Created once per scene load; never recreated per frame.
+  etna::PersistentDescriptorSet bindlessTextureSet;
 
   glm::mat4x4 worldViewProj;
   glm::vec3 cameraWorldPos{0.f};
