@@ -57,7 +57,7 @@ private:
   void renderScene(
     vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout);
 
-  void performFrustumCulling(const glm::mat4x4& projView);
+  void performFrustumCulling(const glm::mat4x4& proj_view);
 
   void prepareInstanceMatrices();
 
@@ -80,12 +80,11 @@ private:
 
   struct PushConstants
   {
-    glm::mat4x4 projView;
+    glm::mat4x4 proj_view;
     // xyz=world-space camera position (needed for Fresnel / view vector), w unused
     glm::vec4 cameraPos{0.f, 0.f, 0.f, 0.f};
     uint32_t isBaked{0};
     uint32_t debugMode{0};
-    uint32_t relemIdx{0};
   } pushConst;
 
   // GPU-side material table: one entry per render element (all relems in the scene).
@@ -100,6 +99,8 @@ private:
     glm::vec4 materialParams;
   };
   etna::Buffer relemMaterialsBuffer;
+  etna::Buffer indirectBuffer;    // VkDrawIndexedIndirectCommand[]
+  etna::Buffer drawMappingBuffer; // uint32_t[] — draw_id → relemIdx
 
   // Persistent bindless descriptor set — one binding with all scene textures.
   // Created once per scene load; never recreated per frame.

@@ -1,4 +1,5 @@
-#version 450
+#version 460
+#extension GL_ARB_shader_draw_parameters : require
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_GOOGLE_include_directive : require
 
@@ -13,13 +14,11 @@ layout(push_constant) uniform params_t
   vec4 cameraPos;
   uint isBaked;
   uint debugMode;
-  uint relemIdx;
 } params;
 
-layout(set = 0, binding = 0) buffer InstanceMatrices
-{
-  mat4 model[];
-};
+layout(set = 0, binding = 0) buffer InstanceMatrices { mat4 model[]; };
+// Per-draw mapping: draw index (gl_DrawID) → render-element index in RelemMaterials
+layout(set = 0, binding = 1) readonly buffer DrawMapping { uint relemIdxPerDraw[]; };
 
 layout(location = 0) out VS_OUT
 {
@@ -28,6 +27,7 @@ layout(location = 0) out VS_OUT
   vec3 wTangent;
   vec2 texCoord;
   float tangentSign;
+  flat uint relemIdx;
 } vOut;
 
 out gl_PerVertex { vec4 gl_Position; };
@@ -43,6 +43,7 @@ void main(void)
   vOut.wTangent = normalize(mat3(transpose(inverse(modelTm))) * wTang.xyz);
   vOut.texCoord = vTexCoordAndTang.xy;
   vOut.tangentSign = vTexCoordAndTang.w;
+  vOut.relemIdx = relemIdxPerDraw[gl_DrawID];
 
   gl_Position = params.mProjView * vec4(vOut.wPos, 1.0);
 }

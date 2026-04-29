@@ -5,7 +5,6 @@
 
 layout(location = 0) out vec4 out_fragColor;
 
-// Set 1: per-scene material table (one entry per render element)
 struct RelemMat
 {
   uint baseColorIdx;
@@ -16,13 +15,9 @@ struct RelemMat
   vec4 materialParams;  // x=metallic, y=roughness, z=normalScale, w=occlusionStrength
 };
 
-layout(set = 1, binding = 0) readonly buffer RelemMaterialBuffer
-{
-  RelemMat data[];
-} relemMats;
+layout(set = 1, binding = 0) readonly buffer RelemMaterialBuffer { RelemMat data[]; } relemMats;
 
-// Set 2: bindless texture array — all scene textures in a single descriptor set.
-// nonuniformEXT is required because the index varies per draw (not dynamically uniform).
+// Bindless texture array — all scene textures in one descriptor set
 layout(set = 2, binding = 0) uniform sampler2D textures[];
 
 layout(push_constant) uniform params_t
@@ -31,7 +26,6 @@ layout(push_constant) uniform params_t
   vec4 cameraPos;
   uint isBaked;
   uint debugMode;
-  uint relemIdx;
 } params;
 
 layout(location = 0) in VS_OUT
@@ -41,11 +35,12 @@ layout(location = 0) in VS_OUT
   vec3 wTangent;
   vec2 texCoord;
   float tangentSign;
+  flat uint relemIdx;
 } surf;
 
 void main()
 {
-  RelemMat mat = relemMats.data[params.relemIdx];
+  RelemMat mat = relemMats.data[surf.relemIdx];
 
   const vec4 baseColorSample  = texture(textures[nonuniformEXT(mat.baseColorIdx)],  surf.texCoord);
   const vec4 mrSample         = texture(textures[nonuniformEXT(mat.metalRoughIdx)], surf.texCoord);
@@ -58,7 +53,6 @@ void main()
   const float normalScale = mat.materialParams.z;
   const float ao        = mix(1.0, occlusionSample, mat.materialParams.w);
 
-  // tangent.w == 0 marks meshes without TANGENT data
   const vec3 N = normalize(surf.wNorm);
   vec3 shadingNormal = N;
   if (abs(surf.tangentSign) > 0.5)
@@ -75,7 +69,6 @@ void main()
   if (params.debugMode == 3u) { out_fragColor = vec4(metallic, roughness, 0.0, 1.0); return; }
   if (params.debugMode == 4u) { out_fragColor = vec4(vec3(ao), 1.0); return; }
 
-  // GGX PBR — sun direction & colour match skybox.frag
   const vec3 sunDir   = normalize(vec3(20.0, 20.0, 20.0));
   const vec3 lightColor = vec3(1.0, 0.95, 0.85) * 3.0;
   const vec3 sN = shadingNormal;
@@ -92,7 +85,6 @@ void main()
   const float alpha2 = alpha * alpha;
 
   const vec3 F0 = mix(vec3(0.04), albedo, metallic);
-
   const vec3 F = F0 + (vec3(1.0) - F0) * pow(1.0 - VdotH, 5.0);
 
   const float denomD = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
@@ -104,13 +96,12 @@ void main()
 
   const vec3 specular = D * Vvis * F;
   const vec3 diffuse  = (vec3(1.0) - F) * (1.0 - metallic) * albedo / 3.14159265;
-
   const vec3 Lo = (diffuse + specular) * lightColor * NdotL;
 
-  // Hemispheric ambient (matches skybox.frag constants)
   const vec3 SKY_ZENITH  = vec3(0.18, 0.32, 0.70);
   const vec3 SKY_HORIZON = vec3(0.78, 0.86, 0.95);
   const vec3 SKY_GROUND  = vec3(0.18, 0.16, 0.14);
+
   vec3 skyAmbient = sN.y >= 0.0
     ? mix(SKY_HORIZON, SKY_ZENITH, smoothstep(0.0, 0.55, sN.y))
     : mix(SKY_HORIZON, SKY_GROUND, smoothstep(0.0, 0.30, -sN.y));
@@ -121,8 +112,7 @@ void main()
   vec3 skyRefl = R.y >= 0.0
     ? mix(SKY_HORIZON, SKY_ZENITH, smoothstep(0.0, 0.55, R.y))
     : mix(SKY_HORIZON, SKY_GROUND, smoothstep(0.0, 0.30, -R.y));
-  float NdotV0 = max(dot(sN, V), 0.0);
-  vec3 Fa = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV0, 5.0);
+  vec3 Fa = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
   vec3 ambientSpec = skyRefl * Fa * ao * (1.0 - roughness * 0.7);
 
   out_fragColor.rgb = ambient + ambientSpec + Lo;

@@ -578,7 +578,7 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
       };
 
       result.relems.push_back(RenderElement{
-        .vertexOffset = static_cast<std::uint32_t>(result.vertices.size()),
+        .vertexOffset = static_cast<std::int32_t>(result.vertices.size()),
         .indexOffset = static_cast<std::uint32_t>(result.indices.size()),
         .indexCount = static_cast<std::uint32_t>(accessors[0]->count),
         .materialId = resolve_material_id(prim.material),
@@ -763,7 +763,7 @@ SceneManager::ProcessedMeshes SceneManager::processBakedMeshes(const tinygltf::M
       const tinygltf::Accessor& posAccessor = model.accessors[prim.attributes.at("POSITION")];
 
       result.relems.push_back(RenderElement{
-        .vertexOffset = static_cast<std::uint32_t>(posAccessor.byteOffset / sizeof(Vertex)),
+        .vertexOffset = static_cast<std::int32_t>(posAccessor.byteOffset / sizeof(Vertex)),
         .indexOffset = static_cast<std::uint32_t>(indAccessor.byteOffset / sizeof(std::uint32_t)),
         .indexCount = static_cast<std::uint32_t>(indAccessor.count),
         .materialId = resolve_material_id(prim.material),

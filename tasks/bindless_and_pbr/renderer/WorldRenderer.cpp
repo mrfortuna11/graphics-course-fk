@@ -1,4 +1,5 @@
 #include "WorldRenderer.hpp"
+#include "vulkan/vulkan.hpp"
 
 #include <etna/GlobalContext.hpp>
 #include <etna/Etna.hpp>
@@ -65,6 +66,25 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
     .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
     .name = "relemMaterials",
+  });
+
+  // indirectBuffer: VkDrawIndexedIndirectCommand (5×uint32) 
+  // drawMappingBuffer: one uint32 per visible relem 
+  const vk::DeviceSize maxDrawsBytes = 10000u * sizeof(vk::DrawIndexedIndirectCommand);
+  indirectBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
+    .size = maxDrawsBytes,
+    .bufferUsage =
+      vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+    .name = "indirectDraws",
+  });
+
+  const vk::DeviceSize maxDrawMappingBytes = 10000u * sizeof(uint32_t);
+  drawMappingBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
+    .size = maxDrawMappingBytes,
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+    .name = "drawMapping",
   });
 
   constexpr vk::DeviceSize LUMINANCE_STATS_BYTES =
@@ -200,9 +220,8 @@ void WorldRenderer::uploadSceneTextures()
         i);
     }
 
-    bindlessTextureSet =
-      etna::get_context().getPersistentDescriptorPool().allocateSet(
-        layoutId, std::move(texBindings), /*allow_unbound_slots=*/true);
+    bindlessTextureSet = etna::create_persistent_descriptor_set(
+      layoutId, std::move(texBindings), /*allow_unbound_slots=*/true);
   }
 }
 
@@ -325,7 +344,7 @@ void WorldRenderer::update(const FramePacket& packet)
   previousTime = packet.currentTime;
 }
 
-void WorldRenderer::performFrustumCulling(const glm::mat4x4& projView)
+void WorldRenderer::performFrustumCulling(const glm::mat4x4& proj_view)
 {
   auto meshes = sceneMgr->getMeshes();
   auto instanceMeshes = sceneMgr->getInstanceMeshes();
@@ -350,7 +369,7 @@ void WorldRenderer::performFrustumCulling(const glm::mat4x4& projView)
           continue;
 
         const glm::mat4x4 model = instanceMatrices[instIdx];
-        const glm::mat4x4 mvp = projView * model;
+        const glm::mat4x4 mvp = proj_view * model;
 
         bool visible = false;
         for (int cx = 0; cx < 2 && !visible; ++cx)
@@ -386,10 +405,31 @@ void WorldRenderer::performFrustumCulling(const glm::mat4x4& projView)
 void WorldRenderer::prepareInstanceMatrices()
 {
   std::vector<glm::mat4x4> allVisibleMatrices;
+  std::vector<vk::DrawIndexedIndirectCommand> indirectCmds;
+  std::vector<uint32_t> drawMapping;
+
+  auto relems = sceneMgr->getRenderElements();
+  uint32_t instanceOffset = 0;
+
   for (const auto& element : culledElements.elements)
   {
+    const auto& relem = relems[element.relemIdx];
+    const uint32_t instanceCount = static_cast<uint32_t>(element.visibleMatrices.size());
+
     allVisibleMatrices.insert(
       allVisibleMatrices.end(), element.visibleMatrices.begin(), element.visibleMatrices.end());
+
+    indirectCmds.push_back(vk::DrawIndexedIndirectCommand{
+      .indexCount = relem.indexCount,
+      .instanceCount = instanceCount,
+      .firstIndex = relem.indexOffset,
+      .vertexOffset = relem.vertexOffset,
+      .firstInstance = instanceOffset,
+    });
+
+    drawMapping.push_back(static_cast<uint32_t>(element.relemIdx));
+
+    instanceOffset += instanceCount;
   }
 
   if (!allVisibleMatrices.empty())
@@ -399,33 +439,57 @@ void WorldRenderer::prepareInstanceMatrices()
     transferHelper->uploadBuffer<glm::mat4x4>(
       *oneShot, instanceMatricesBuffer, 0, std::span<const glm::mat4x4>(allVisibleMatrices));
   }
+
+  if (!indirectCmds.empty())
+  {
+    auto& ctx = etna::get_context();
+    {
+      auto oneShot = ctx.createOneShotCmdMgr();
+      transferHelper->uploadBuffer<vk::DrawIndexedIndirectCommand>(
+        *oneShot, indirectBuffer, 0, std::span<const vk::DrawIndexedIndirectCommand>(indirectCmds));
+    }
+    {
+      auto oneShot = ctx.createOneShotCmdMgr();
+      transferHelper->uploadBuffer<uint32_t>(
+        *oneShot, drawMappingBuffer, 0, std::span<const uint32_t>(drawMapping));
+    }
+  }
 }
 
 void WorldRenderer::renderScene(
   vk::CommandBuffer cmd_buf, const glm::mat4x4& glob_tm, vk::PipelineLayout pipeline_layout)
 {
-  if (!sceneMgr->getVertexBuffer())
+  if (!sceneMgr->getVertexBuffer() || culledElements.elements.empty())
     return;
 
   cmd_buf.bindVertexBuffers(0, {sceneMgr->getVertexBuffer()}, {0});
   cmd_buf.bindIndexBuffer(sceneMgr->getIndexBuffer(), 0, vk::IndexType::eUint32);
 
-  pushConst.projView = glob_tm;
+  pushConst.proj_view = glob_tm;
   pushConst.cameraPos = glm::vec4(cameraWorldPos, 0.0f);
   pushConst.isBaked = bakedEnabled ? 1u : 0u;
   pushConst.debugMode = static_cast<std::uint32_t>(debugMode);
 
+  cmd_buf.pushConstants<PushConstants>(
+    pipeline_layout,
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+    0,
+    {pushConst});
+
   auto programInfo = etna::get_shader_program("static_mesh_material");
 
-  // Set 0: instance matrices (per-frame).
+  // Set 0: instance matrices + draw→relem mapping 
   auto instanceSet = etna::create_descriptor_set(
     programInfo.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, instanceMatricesBuffer.genBinding()}});
+    {
+      etna::Binding{0, instanceMatricesBuffer.genBinding()},
+      etna::Binding{1, drawMappingBuffer.genBinding()},
+    });
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, {instanceSet.getVkSet()}, {});
 
-  // Set 1: RelemMaterials SSBO — bound once for the whole scene.
+  // Set 1: RelemMaterials SSBO — persistent, bound once
   auto materialsSet = etna::create_descriptor_set(
     programInfo.getDescriptorLayoutId(1),
     cmd_buf,
@@ -433,32 +497,16 @@ void WorldRenderer::renderScene(
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, pipeline_layout, 1, {materialsSet.getVkSet()}, {});
 
-  // Set 2: bindless texture array — persistent, bound once.
+  // Set 2: bindless texture array — persistent, bound once
+  bindlessTextureSet.processBarriers(cmd_buf);
   vk::DescriptorSet bindlessVkSet = bindlessTextureSet.getVkSet();
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, pipeline_layout, 2, {bindlessVkSet}, {});
 
-  auto relems = sceneMgr->getRenderElements();
-
-  uint32_t instanceOffset = 0;
-  for (const auto& element : culledElements.elements)
-  {
-    const auto& relem = relems[element.relemIdx];
-    const uint32_t instanceCount = static_cast<uint32_t>(element.visibleMatrices.size());
-
-    // Only relemIdx changes per draw — no per-relem descriptor-set updates.
-    pushConst.relemIdx = static_cast<uint32_t>(element.relemIdx);
-    cmd_buf.pushConstants<PushConstants>(
-      pipeline_layout,
-      vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-      0,
-      {pushConst});
-
-    cmd_buf.drawIndexed(
-      relem.indexCount, instanceCount, relem.indexOffset, relem.vertexOffset, instanceOffset);
-
-    instanceOffset += instanceCount;
-  }
+  // One indirect draw call 
+  const uint32_t drawCount = static_cast<uint32_t>(culledElements.elements.size());
+  cmd_buf.drawIndexedIndirect(
+    indirectBuffer.get(), 0, drawCount, sizeof(vk::DrawIndexedIndirectCommand));
 }
 
 void WorldRenderer::renderWorld(

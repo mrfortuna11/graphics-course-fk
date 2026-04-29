@@ -50,7 +50,7 @@ struct Material
 // of a certain pipeline with specific bindings (including material data)
 struct RenderElement
 {
-  std::uint32_t vertexOffset;
+  std::int32_t vertexOffset;
   std::uint32_t indexOffset;
   std::uint32_t indexCount;
   MaterialId materialId;
@@ -73,8 +73,8 @@ public:
     std::uint32_t width;
     std::uint32_t height;
     std::vector<std::uint8_t> rgba8;
-    // true  => data is sRGB-encoded (baseColor, emissive). Upload as R8G8B8A8_SRGB.
-    // false => data is linear (metallicRoughness, normal, occlusion). Upload as R8G8B8A8_UNORM.
+    // true  => data is sRGB-encoded (baseColor, emissive) - R8G8B8A8_SRGB
+    // false => data is linear (metallicRoughness, normal, occlusion) -R8G8B8A8_UNORM
     bool isSrgb = false;
   };
 
@@ -83,7 +83,6 @@ public:
   void selectScene(std::filesystem::path path, bool baked);
 
   // Every instance is a mesh drawn with a certain transform
-  // NOTE: maybe you can pass some additional data through unused matrix entries?
   std::span<const glm::mat4x4> getInstanceMatrices() { return instanceMatrices; }
   std::span<const std::uint32_t> getInstanceMeshes() { return instanceMeshes; }
 
@@ -117,15 +116,9 @@ public:
 private:
   std::optional<tinygltf::Model> loadModel(std::filesystem::path path);
 
-  // Reads all images from the glTF and prepends built-in fallbacks.
-  // The `isSrgbImage` array tracks which images are sampled in sRGB;
-  // it's built while processing materials (see processMaterials).
   std::vector<SceneTexture> processTextures(
     const tinygltf::Model& model, const std::vector<bool>& is_srgb_image) const;
 
-  // Parses glTF materials into our Material structs. Also fills
-  // `out_is_srgb_image` — a per-image flag indicating whether the image
-  // must be uploaded in sRGB format (baseColor, emissive).
   std::vector<Material> processMaterials(
     const tinygltf::Model& model, std::vector<bool>& out_is_srgb_image) const;
 
@@ -139,9 +132,7 @@ private:
 
   struct Vertex
   {
-    // First 3 floats are position, 4th float is a packed normal
     glm::vec4 positionAndNormal;
-    // First 2 floats are tex coords, 3rd is a packed tangent, 4th is padding
     glm::vec4 texCoordAndTangentAndPadding;
   };
 
