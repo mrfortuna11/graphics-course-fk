@@ -74,7 +74,7 @@ private:
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
-  
+
   etna::Image mainViewDepth;
   etna::Image hdrTarget;
   etna::Sampler hdrSampler;
@@ -108,7 +108,8 @@ private:
   etna::Buffer sceneInstanceMeshIdBuffer;      // uint[]   — instance_id -> mesh_id
   etna::Buffer sceneRelemAabbBuffer;           // vec4[2]  — AABB per relem: mn, mx
   etna::Buffer sceneMeshRelemRangeBuffer;      // uvec2[]  — mesh_id -> {firstRelem, relemCount}
-  etna::Buffer sceneRelemDrawTemplateBuffer;   // uvec4[]  — {indexCount, firstIndex, vertexOffset, pad}
+  etna::Buffer
+    sceneRelemDrawTemplateBuffer; // uvec4[]  — {indexCount, firstIndex, vertexOffset, pad}
 
   uint32_t sceneInstanceCount{0};
   uint32_t sceneRelemCount{0};
@@ -121,6 +122,8 @@ private:
   etna::Buffer relemVisibleCountsBuffer;   // uint[] — visible instance count per relem
   etna::Buffer relemInstanceOffsetsBuffer; // uint[] — exclusive prefix sum of counts
   etna::Buffer relemWriteCursorsBuffer;    // uint[] — atomic write cursors (cull_write pass)
+  etna::Buffer cullReadbackBuffer;         // CPU-readable copy of relemVisibleCounts
+  uint32_t lastFrameVisibleInstances{0};
 
   etna::PersistentDescriptorSet bindlessTextureSet;
 
@@ -131,7 +134,7 @@ private:
   float deltaTime = 0.f;
 
   float adaptationSpeed = 2.5f;
-  float keyValue = 0.18f;
+  float keyValue = 0.3f;
   float minExposure = 0.01f;
   float maxExposure = 100.f;
   int tonemapMode = 1; // 0 Reinhard, 1 ACES, 2 None
@@ -201,7 +204,7 @@ private:
   void renderClipmapTerrain(vk::CommandBuffer cmd_buf);
 
   bool logEnabled = true;
-  std::uint32_t logFrameCounter = 0;
+  // std::uint32_t logFrameCounter = 0;
 
   bool bakedEnabled = false;
   SceneType selectedScene = SceneType::LowPolyDarkTown;

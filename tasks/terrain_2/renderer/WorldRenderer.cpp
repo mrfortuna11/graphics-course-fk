@@ -33,120 +33,155 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
 
   auto& ctx = etna::get_context();
 
-  mainViewDepth = ctx.createImage(etna::Image::CreateInfo{
-    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-    .name = "main_view_depth",
-    .format = vk::Format::eD32Sfloat,
-    .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
-  });
+  mainViewDepth = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+      .name = "main_view_depth",
+      .format = vk::Format::eD32Sfloat,
+      .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+    });
 
-  hdrTarget = ctx.createImage(etna::Image::CreateInfo{
-    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
-    .name = "hdr_target",
-    .format = vk::Format::eB10G11R11UfloatPack32,
-    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
-  });
+  hdrTarget = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+      .name = "hdr_target",
+      .format = vk::Format::eB10G11R11UfloatPack32,
+      .imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+    });
 
-  hdrSampler = etna::Sampler(etna::Sampler::CreateInfo{
-    .filter = vk::Filter::eLinear,
-    .addressMode = vk::SamplerAddressMode::eClampToEdge,
-    .name = "hdr_sampler",
-  });
+  hdrSampler = etna::Sampler(
+    etna::Sampler::CreateInfo{
+      .filter = vk::Filter::eLinear,
+      .addressMode = vk::SamplerAddressMode::eClampToEdge,
+      .name = "hdr_sampler",
+    });
 
   transferHelper = std::make_unique<etna::BlockingTransferHelper>(
     etna::BlockingTransferHelper::CreateInfo{.stagingSize = 4u * 1024u * 1024u});
 
-  albedoSampler = etna::Sampler(etna::Sampler::CreateInfo{
-    .addressMode = vk::SamplerAddressMode::eRepeat,
-    .name = "albedo_sampler",
-  });
+  albedoSampler = etna::Sampler(
+    etna::Sampler::CreateInfo{
+      .addressMode = vk::SamplerAddressMode::eRepeat,
+      .name = "albedo_sampler",
+    });
 
   const vk::DeviceSize maxInstancesBytes = 10000u * sizeof(glm::mat4x4);
-  instanceMatricesBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = maxInstancesBytes,
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "instanceMatrices",
-  });
+  instanceMatricesBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = maxInstancesBytes,
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "instanceMatrices",
+    });
 
   const vk::DeviceSize maxRelemMatsBytes = 20000u * sizeof(RelemMat);
-  relemMaterialsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = maxRelemMatsBytes,
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "relemMaterials",
-  });
+  relemMaterialsBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = maxRelemMatsBytes,
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "relemMaterials",
+    });
 
-  sceneAllInstanceMatricesBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 10000u * sizeof(glm::mat4),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "sceneAllInstanceMatrices",
-  });
-  sceneInstanceMeshIdBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 10000u * sizeof(uint32_t),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "sceneInstanceMeshId",
-  });
-  sceneRelemAabbBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 20000u * 2u * sizeof(glm::vec4),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "sceneRelemAabb",
-  });
-  sceneMeshRelemRangeBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 5000u * sizeof(glm::uvec2),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "sceneMeshRelemRange",
-  });
-  sceneRelemDrawTemplateBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 20000u * sizeof(glm::uvec4),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "sceneRelemDrawTemplate",
-  });
+  sceneAllInstanceMatricesBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 10000u * sizeof(glm::mat4),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "sceneAllInstanceMatrices",
+    });
+  sceneInstanceMeshIdBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 10000u * sizeof(uint32_t),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "sceneInstanceMeshId",
+    });
+  sceneRelemAabbBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 20000u * 2u * sizeof(glm::vec4),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "sceneRelemAabb",
+    });
+  sceneMeshRelemRangeBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 5000u * sizeof(glm::uvec2),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "sceneMeshRelemRange",
+    });
+  sceneRelemDrawTemplateBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 20000u * sizeof(glm::uvec4),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "sceneRelemDrawTemplate",
+    });
 
   // Per-frame culling intermediates
-  relemVisibleCountsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 20000u * sizeof(uint32_t),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "relemVisibleCounts",
-  });
-  relemInstanceOffsetsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 20000u * sizeof(uint32_t),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "relemInstanceOffsets",
-  });
-  relemWriteCursorsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = 20000u * sizeof(uint32_t),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "relemWriteCursors",
-  });
+  relemVisibleCountsBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 20000u * sizeof(uint32_t),
+      .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer |
+        vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "relemVisibleCounts",
+    });
+  cullReadbackBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 20000u * sizeof(uint32_t),
+      .bufferUsage = vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+      .allocationCreate =
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+      .name = "cullReadback",
+    });
+  relemInstanceOffsetsBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 20000u * sizeof(uint32_t),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "relemInstanceOffsets",
+    });
+  relemWriteCursorsBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = 20000u * sizeof(uint32_t),
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "relemWriteCursors",
+    });
 
   // indirectBuffer: VkDrawIndexedIndirectCommand (5×uint32)
   // drawMappingBuffer: one uint32 per visible relem
   const vk::DeviceSize maxDrawsBytes = 10000u * sizeof(vk::DrawIndexedIndirectCommand);
-  indirectBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = maxDrawsBytes,
-    .bufferUsage = vk::BufferUsageFlagBits::eIndirectBuffer
-                 | vk::BufferUsageFlagBits::eStorageBuffer
-                 | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "indirectDraws",
-  });
+  indirectBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = maxDrawsBytes,
+      .bufferUsage = vk::BufferUsageFlagBits::eIndirectBuffer |
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "indirectDraws",
+    });
 
   const vk::DeviceSize maxDrawMappingBytes = 10000u * sizeof(uint32_t);
-  drawMappingBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = maxDrawMappingBytes,
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "drawMapping",
-  });
+  drawMappingBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = maxDrawMappingBytes,
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "drawMapping",
+    });
 
   constexpr vk::DeviceSize LUMINANCE_STATS_BYTES =
     sizeof(std::uint32_t) * 2u + sizeof(std::uint32_t) * 128u + sizeof(float);
@@ -207,13 +242,14 @@ void WorldRenderer::uploadSceneTextures()
     const vk::Format format =
       texture.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
 
-    auto gpuImage = ctx.createImage(etna::Image::CreateInfo{
-      .extent = vk::Extent3D{texture.width, texture.height, 1},
-      .name = std::string("scene_texture_") + std::to_string(i),
-      .format = format,
-      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
-      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    });
+    auto gpuImage = ctx.createImage(
+      etna::Image::CreateInfo{
+        .extent = vk::Extent3D{texture.width, texture.height, 1},
+        .name = std::string("scene_texture_") + std::to_string(i),
+        .format = format,
+        .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+        .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      });
 
     transferHelper->uploadImage(
       *oneShot,
@@ -270,42 +306,39 @@ void WorldRenderer::uploadSceneTextures()
       const auto matIdx = static_cast<uint32_t>(relem.materialId);
       const auto& m = materials[matIdx < materials.size() ? matIdx : 0u];
 
-      cpuMats.push_back(RelemMat{
-        .baseColorIdx = resolveIdx(m.baseColorTex, TextureId::DefaultBaseColor),
-        .metalRoughIdx = resolveIdx(m.metallicRoughnessTex, TextureId::DefaultMetallicRoughness),
-        .normalIdx = resolveIdx(m.normalTex, TextureId::DefaultNormal),
-        .occlusionIdx = resolveIdx(m.occlusionTex, TextureId::DefaultOcclusion),
-        .baseColorFactor = m.baseColorFactor,
-        .materialParams = glm::vec4(
-          m.metallicFactor, m.roughnessFactor, m.normalScale, m.occlusionStrength),
-      });
+      cpuMats.push_back(
+        RelemMat{
+          .baseColorIdx = resolveIdx(m.baseColorTex, TextureId::DefaultBaseColor),
+          .metalRoughIdx = resolveIdx(m.metallicRoughnessTex, TextureId::DefaultMetallicRoughness),
+          .normalIdx = resolveIdx(m.normalTex, TextureId::DefaultNormal),
+          .occlusionIdx = resolveIdx(m.occlusionTex, TextureId::DefaultOcclusion),
+          .baseColorFactor = m.baseColorFactor,
+          .materialParams =
+            glm::vec4(m.metallicFactor, m.roughnessFactor, m.normalScale, m.occlusionStrength),
+        });
     }
 
     if (!cpuMats.empty())
     {
       auto oneShotMat = ctx.createOneShotCmdMgr();
       transferHelper->uploadBuffer<RelemMat>(
-        *oneShotMat,
-        relemMaterialsBuffer,
-        0,
-        std::span<const RelemMat>(cpuMats));
+        *oneShotMat, relemMaterialsBuffer, 0, std::span<const RelemMat>(cpuMats));
     }
   }
 
   // Upload persistent scene geometry buffers for GPU culling
   {
     auto instanceMatrices = sceneMgr->getInstanceMatrices();
-    auto instanceMeshes   = sceneMgr->getInstanceMeshes();
-    auto relems           = sceneMgr->getRenderElements();
-    auto meshes           = sceneMgr->getMeshes();
-    auto aabbs            = sceneMgr->getRenderElementAABBs();
+    auto instanceMeshes = sceneMgr->getInstanceMeshes();
+    auto relems = sceneMgr->getRenderElements();
+    auto meshes = sceneMgr->getMeshes();
+    auto aabbs = sceneMgr->getRenderElementAABBs();
 
     sceneInstanceCount = static_cast<uint32_t>(instanceMatrices.size());
-    sceneRelemCount    = static_cast<uint32_t>(relems.size());
+    sceneRelemCount = static_cast<uint32_t>(relems.size());
 
     if (sceneInstanceCount > 0)
     {
-      auto oneShot = ctx.createOneShotCmdMgr();
       transferHelper->uploadBuffer<glm::mat4>(
         *oneShot,
         sceneAllInstanceMatricesBuffer,
@@ -315,7 +348,6 @@ void WorldRenderer::uploadSceneTextures()
 
     if (sceneInstanceCount > 0)
     {
-      auto oneShot = ctx.createOneShotCmdMgr();
       transferHelper->uploadBuffer<uint32_t>(
         *oneShot,
         sceneInstanceMeshIdBuffer,
@@ -333,7 +365,6 @@ void WorldRenderer::uploadSceneTextures()
         gpuAabbs.push_back(glm::vec4(a.min, 0.f));
         gpuAabbs.push_back(glm::vec4(a.max, 0.f));
       }
-      auto oneShot = ctx.createOneShotCmdMgr();
       transferHelper->uploadBuffer<glm::vec4>(
         *oneShot, sceneRelemAabbBuffer, 0, std::span<const glm::vec4>(gpuAabbs));
     }
@@ -344,7 +375,6 @@ void WorldRenderer::uploadSceneTextures()
       gpuRanges.reserve(meshes.size());
       for (const auto& m : meshes)
         gpuRanges.push_back(glm::uvec2(m.firstRelem, m.relemCount));
-      auto oneShot = ctx.createOneShotCmdMgr();
       transferHelper->uploadBuffer<glm::uvec2>(
         *oneShot, sceneMeshRelemRangeBuffer, 0, std::span<const glm::uvec2>(gpuRanges));
     }
@@ -355,13 +385,9 @@ void WorldRenderer::uploadSceneTextures()
       gpuTemplates.reserve(relems.size());
       for (const auto& r : relems)
       {
-        gpuTemplates.push_back(glm::uvec4(
-          r.indexCount,
-          r.indexOffset,
-          static_cast<uint32_t>(r.vertexOffset),
-          0u));
+        gpuTemplates.push_back(
+          glm::uvec4(r.indexCount, r.indexOffset, static_cast<uint32_t>(r.vertexOffset), 0u));
       }
-      auto oneShot = ctx.createOneShotCmdMgr();
       transferHelper->uploadBuffer<glm::uvec4>(
         *oneShot, sceneRelemDrawTemplateBuffer, 0, std::span<const glm::uvec4>(gpuTemplates));
     }
@@ -375,7 +401,7 @@ void WorldRenderer::uploadSceneTextures()
 
   {
     auto programInfo = etna::get_shader_program("static_mesh_material");
-    auto layoutId    = programInfo.getDescriptorLayoutId(2);
+    auto layoutId = programInfo.getDescriptorLayoutId(2);
 
     std::vector<etna::Binding> texBindings;
     texBindings.reserve(sceneTextures.size());
@@ -398,7 +424,8 @@ void WorldRenderer::loadShaders()
     "static_mesh_material",
     {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
      BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
-  etna::create_program("static_mesh", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+  etna::create_program(
+    "static_mesh", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
 
   etna::create_program(
     "postprocess",
@@ -407,12 +434,9 @@ void WorldRenderer::loadShaders()
 
   etna::create_program(
     "clear_stats", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clear_stats.comp.spv"});
-  etna::create_program(
-    "minmax", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "minmax.comp.spv"});
-  etna::create_program(
-    "histogram", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "histogram.comp.spv"});
-  etna::create_program(
-    "reduce", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "reduce.comp.spv"});
+  etna::create_program("minmax", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "minmax.comp.spv"});
+  etna::create_program("histogram", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "histogram.comp.spv"});
+  etna::create_program("reduce", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "reduce.comp.spv"});
 
   etna::create_program(
     "skybox",
@@ -686,13 +710,14 @@ void WorldRenderer::prepareInstanceMatrices()
     allVisibleMatrices.insert(
       allVisibleMatrices.end(), element.visibleMatrices.begin(), element.visibleMatrices.end());
 
-    indirectCmds.push_back(vk::DrawIndexedIndirectCommand{
-      .indexCount = relem.indexCount,
-      .instanceCount = instanceCount,
-      .firstIndex = relem.indexOffset,
-      .vertexOffset = relem.vertexOffset,
-      .firstInstance = instanceOffset,
-    });
+    indirectCmds.push_back(
+      vk::DrawIndexedIndirectCommand{
+        .indexCount = relem.indexCount,
+        .instanceCount = instanceCount,
+        .firstIndex = relem.indexOffset,
+        .vertexOffset = relem.vertexOffset,
+        .firstInstance = instanceOffset,
+      });
 
     drawMapping.push_back(static_cast<uint32_t>(element.relemIdx));
 
@@ -745,7 +770,7 @@ void WorldRenderer::renderScene(
 
   auto programInfo = etna::get_shader_program("static_mesh_material");
 
-  // Set 0: instance matrices + draw->relem mapping 
+  // Set 0: instance matrices + draw->relem mapping
   auto instanceSet = etna::create_descriptor_set(
     programInfo.getDescriptorLayoutId(0),
     cmd_buf,
@@ -770,7 +795,7 @@ void WorldRenderer::renderScene(
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, pipeline_layout, 2, {bindlessVkSet}, {});
 
-  // One indirect draw call 
+  // One indirect draw call
   cmd_buf.drawIndexedIndirect(
     indirectBuffer.get(), 0, sceneRelemCount, sizeof(vk::DrawIndexedIndirectCommand));
 }
@@ -780,12 +805,12 @@ void WorldRenderer::renderWorld(
 {
   ETNA_PROFILE_GPU(cmd_buf, renderWorld);
 
-  if (logEnabled && (logFrameCounter++ % 60u) == 0u)
+  /*if (logEnabled && (logFrameCounter++ % 60u) == 0u)
     spdlog::info(
       "GPU culling: {} instances, {} relems",
       sceneInstanceCount,
       sceneRelemCount);
-
+  */
   if (sceneInstanceCount > 0 && sceneRelemCount > 0)
   {
     ETNA_PROFILE_GPU(cmd_buf, gpuCulling);
@@ -793,8 +818,8 @@ void WorldRenderer::renderWorld(
     struct CullPC
     {
       glm::mat4 projView;
-      uint32_t  instanceCount;
-      uint32_t  relemCount;
+      uint32_t instanceCount;
+      uint32_t relemCount;
     };
     const CullPC cullPc{worldViewProj, sceneInstanceCount, sceneRelemCount};
 
@@ -804,23 +829,23 @@ void WorldRenderer::renderWorld(
       static_cast<vk::DeviceSize>(sceneRelemCount) * sizeof(uint32_t),
       0u);
     {
-      vk::BufferMemoryBarrier2 b{
-        .srcStageMask  = vk::PipelineStageFlagBits2::eTransfer,
+      vk::BufferMemoryBarrier2 memorybarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead
-                       | vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask =
+          vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
         .buffer = relemVisibleCountsBuffer.get(),
         .offset = 0,
-        .size   = vk::WholeSize,
+        .size = vk::WholeSize,
       };
       cmd_buf.pipelineBarrier2(
-        vk::DependencyInfo{.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &b});
+        vk::DependencyInfo{.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &memorybarrier});
     }
 
     {
       auto info = etna::get_shader_program("cull_count");
-      auto ds   = etna::create_descriptor_set(
+      auto ds = etna::create_descriptor_set(
         info.getDescriptorLayoutId(0),
         cmd_buf,
         {
@@ -834,10 +859,11 @@ void WorldRenderer::renderWorld(
       cmd_buf.bindDescriptorSets(
         vk::PipelineBindPoint::eCompute,
         cullCountPipeline.getVkPipelineLayout(),
-        0, {ds.getVkSet()}, {});
+        0,
+        {ds.getVkSet()},
+        {});
       cmd_buf.pushConstants<CullPC>(
-        cullCountPipeline.getVkPipelineLayout(),
-        vk::ShaderStageFlagBits::eCompute, 0, {cullPc});
+        cullCountPipeline.getVkPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, {cullPc});
       cmd_buf.dispatch((sceneInstanceCount + 63u) / 64u, 1, 1);
     }
 
@@ -849,9 +875,12 @@ void WorldRenderer::renderWorld(
     etna::flush_barriers(cmd_buf);
 
     {
-      struct PrefixPC { uint32_t relemCount; };
+      struct PrefixPC
+      {
+        uint32_t relemCount;
+      };
       auto info = etna::get_shader_program("prefix_sum");
-      auto ds   = etna::create_descriptor_set(
+      auto ds = etna::create_descriptor_set(
         info.getDescriptorLayoutId(0),
         cmd_buf,
         {
@@ -866,50 +895,58 @@ void WorldRenderer::renderWorld(
       cmd_buf.bindDescriptorSets(
         vk::PipelineBindPoint::eCompute,
         prefixSumPipeline.getVkPipelineLayout(),
-        0, {ds.getVkSet()}, {});
+        0,
+        {ds.getVkSet()},
+        {});
       cmd_buf.pushConstants<PrefixPC>(
         prefixSumPipeline.getVkPipelineLayout(),
-        vk::ShaderStageFlagBits::eCompute, 0, {PrefixPC{sceneRelemCount}});
+        vk::ShaderStageFlagBits::eCompute,
+        0,
+        {PrefixPC{sceneRelemCount}});
       cmd_buf.dispatch(1, 1, 1);
     }
 
     {
       vk::BufferMemoryBarrier2 barriers[] = {
         {
-          .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+          .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
           .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-          .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+          .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
           .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
           .buffer = relemInstanceOffsetsBuffer.get(),
-          .offset = 0, .size = vk::WholeSize,
+          .offset = 0,
+          .size = vk::WholeSize,
         },
         {
-          .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+          .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
           .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-          .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
-          .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead
-                         | vk::AccessFlagBits2::eShaderStorageWrite,
+          .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+          .dstAccessMask =
+            vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
           .buffer = relemWriteCursorsBuffer.get(),
-          .offset = 0, .size = vk::WholeSize,
+          .offset = 0,
+          .size = vk::WholeSize,
         },
         {
-          .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+          .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
           .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-          .dstStageMask  = vk::PipelineStageFlagBits2::eDrawIndirect,
+          .dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect,
           .dstAccessMask = vk::AccessFlagBits2::eIndirectCommandRead,
           .buffer = indirectBuffer.get(),
-          .offset = 0, .size = vk::WholeSize,
+          .offset = 0,
+          .size = vk::WholeSize,
         },
       };
-      cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-        .bufferMemoryBarrierCount = 3,
-        .pBufferMemoryBarriers    = barriers,
-      });
+      cmd_buf.pipelineBarrier2(
+        vk::DependencyInfo{
+          .bufferMemoryBarrierCount = 3,
+          .pBufferMemoryBarriers = barriers,
+        });
     }
 
     {
       auto info = etna::get_shader_program("cull_write");
-      auto ds   = etna::create_descriptor_set(
+      auto ds = etna::create_descriptor_set(
         info.getDescriptorLayoutId(0),
         cmd_buf,
         {
@@ -925,24 +962,44 @@ void WorldRenderer::renderWorld(
       cmd_buf.bindDescriptorSets(
         vk::PipelineBindPoint::eCompute,
         cullWritePipeline.getVkPipelineLayout(),
-        0, {ds.getVkSet()}, {});
+        0,
+        {ds.getVkSet()},
+        {});
       cmd_buf.pushConstants<CullPC>(
-        cullWritePipeline.getVkPipelineLayout(),
-        vk::ShaderStageFlagBits::eCompute, 0, {cullPc});
+        cullWritePipeline.getVkPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, {cullPc});
       cmd_buf.dispatch((sceneInstanceCount + 63u) / 64u, 1, 1);
     }
 
     {
-      vk::BufferMemoryBarrier2 b{
-        .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      vk::BufferMemoryBarrier2 memorybarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask  = vk::PipelineStageFlagBits2::eVertexShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eVertexShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
         .buffer = instanceMatricesBuffer.get(),
-        .offset = 0, .size = vk::WholeSize,
+        .offset = 0,
+        .size = vk::WholeSize,
       };
       cmd_buf.pipelineBarrier2(
-        vk::DependencyInfo{.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &b});
+        vk::DependencyInfo{.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &memorybarrier});
+    }
+
+    if (sceneRelemCount > 0)
+    {
+      vk::BufferMemoryBarrier2 memorybarrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .buffer = relemVisibleCountsBuffer.get(),
+        .offset = 0,
+        .size = vk::WholeSize,
+      };
+      cmd_buf.pipelineBarrier2(
+        vk::DependencyInfo{.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &memorybarrier});
+
+      vk::BufferCopy region{0, 0, sceneRelemCount * sizeof(uint32_t)};
+      cmd_buf.copyBuffer(relemVisibleCountsBuffer.get(), cullReadbackBuffer.get(), 1, &region);
     }
   }
 
@@ -1014,12 +1071,15 @@ void WorldRenderer::renderWorld(
       info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, statsBind}});
     vk::DescriptorSet vkSet = descSet.getVkSet();
 
-    cmd_buf.bindPipeline(
-      vk::PipelineBindPoint::eCompute, clearStatsPipeline.getVkPipeline());
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, clearStatsPipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       clearStatsPipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
+      0,
+      1,
+      &vkSet,
+      0,
+      nullptr);
     cmd_buf.dispatch(1, 1, 1);
   }
 
@@ -1037,20 +1097,22 @@ void WorldRenderer::renderWorld(
 
     auto info = etna::get_shader_program("minmax");
     auto statsBind = luminanceStatsBuffer.genBinding();
-    auto hdrBind = hdrTarget.genBinding(
-      hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+    auto hdrBind = hdrTarget.genBinding(hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
     auto descSet = etna::create_descriptor_set(
       info.getDescriptorLayoutId(0),
       cmd_buf,
       {etna::Binding{0, statsBind}, etna::Binding{1, hdrBind}});
     vk::DescriptorSet vkSet = descSet.getVkSet();
 
-    cmd_buf.bindPipeline(
-      vk::PipelineBindPoint::eCompute, minmaxPipeline.getVkPipeline());
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, minmaxPipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       minmaxPipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
+      0,
+      1,
+      &vkSet,
+      0,
+      nullptr);
 
     const uint32_t groupsX = (resolution.x + 15u) / 16u;
     const uint32_t groupsY = (resolution.y + 15u) / 16u;
@@ -1071,20 +1133,22 @@ void WorldRenderer::renderWorld(
 
     auto info = etna::get_shader_program("histogram");
     auto statsBind = luminanceStatsBuffer.genBinding();
-    auto hdrBind = hdrTarget.genBinding(
-      hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+    auto hdrBind = hdrTarget.genBinding(hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
     auto descSet = etna::create_descriptor_set(
       info.getDescriptorLayoutId(0),
       cmd_buf,
       {etna::Binding{0, statsBind}, etna::Binding{1, hdrBind}});
     vk::DescriptorSet vkSet = descSet.getVkSet();
 
-    cmd_buf.bindPipeline(
-      vk::PipelineBindPoint::eCompute, histogramPipeline.getVkPipeline());
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, histogramPipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       histogramPipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
+      0,
+      1,
+      &vkSet,
+      0,
+      nullptr);
 
     const uint32_t groupsX = (resolution.x + 15u) / 16u;
     const uint32_t groupsY = (resolution.y + 15u) / 16u;
@@ -1117,17 +1181,17 @@ void WorldRenderer::renderWorld(
       info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, statsBind}});
     vk::DescriptorSet vkSet = descSet.getVkSet();
 
-    cmd_buf.bindPipeline(
-      vk::PipelineBindPoint::eCompute, reducePipeline.getVkPipeline());
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, reducePipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       reducePipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
-    cmd_buf.pushConstants<ReducePush>(
-      reducePipeline.getVkPipelineLayout(),
-      vk::ShaderStageFlagBits::eCompute,
       0,
-      {reducePush});
+      1,
+      &vkSet,
+      0,
+      nullptr);
+    cmd_buf.pushConstants<ReducePush>(
+      reducePipeline.getVkPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, {reducePush});
     cmd_buf.dispatch(1, 1, 1);
   }
 
@@ -1161,8 +1225,7 @@ void WorldRenderer::renderWorld(
     vk::DescriptorSet vkSet = descSet.getVkSet();
     const auto layout = postprocessPipeline.getVkPipelineLayout();
     cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, postprocessPipeline.getVkPipeline());
-    cmd_buf.bindDescriptorSets(
-      vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+    cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
 
     const std::uint32_t tonemapModeU = static_cast<std::uint32_t>(tonemapMode);
     cmd_buf.pushConstants<std::uint32_t>(
@@ -1394,6 +1457,15 @@ void WorldRenderer::drawGui()
     1000.0f / ImGui::GetIO().Framerate,
     ImGui::GetIO().Framerate);
 
+  if (sceneRelemCount > 0)
+  {
+    const auto* counts = reinterpret_cast<const uint32_t*>(cullReadbackBuffer.data());
+    uint32_t visible = 0;
+    for (uint32_t i = 0; i < sceneRelemCount; ++i)
+      visible += counts[i];
+    lastFrameVisibleInstances = visible;
+    ImGui::Text("Culling: %u visible / %u total instances", visible, sceneInstanceCount);
+  }
   ImGui::End();
 }
 
