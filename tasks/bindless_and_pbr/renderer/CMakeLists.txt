@@ -20,4 +20,7 @@ target_add_shaders(bindless_and_pbr_renderer
   shaders/reduce.comp
   shaders/skybox.vert
   shaders/skybox.frag
+  shaders/cull_count.comp
+  shaders/prefix_sum.comp
+  shaders/cull_write.comp
 )

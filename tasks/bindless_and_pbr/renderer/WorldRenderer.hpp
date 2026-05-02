@@ -87,8 +87,6 @@ private:
     uint32_t debugMode{0};
   } pushConst;
 
-  // GPU-side material table: one entry per render element (all relems in the scene).
-  // Filled once at scene load; contains texture indices + factor overrides.
   struct RelemMat
   {
     uint32_t baseColorIdx;
@@ -99,11 +97,25 @@ private:
     glm::vec4 materialParams;
   };
   etna::Buffer relemMaterialsBuffer;
-  etna::Buffer indirectBuffer;    // VkDrawIndexedIndirectCommand[]
-  etna::Buffer drawMappingBuffer; // uint32_t[] — draw_id → relemIdx
 
-  // Persistent bindless descriptor set — one binding with all scene textures.
-  // Created once per scene load; never recreated per frame.
+  etna::Buffer sceneAllInstanceMatricesBuffer; // mat4[]   — all instance transforms
+  etna::Buffer sceneInstanceMeshIdBuffer;      // uint[]   — instance_id -> mesh_id
+  etna::Buffer sceneRelemAabbBuffer;           // vec4[2]  — AABB per relem: mn, mx
+  etna::Buffer sceneMeshRelemRangeBuffer;      // uvec2[]  — mesh_id -> {firstRelem, relemCount}
+  etna::Buffer sceneRelemDrawTemplateBuffer;   // uvec4[]  — {indexCount, firstIndex, vertexOffset, pad}
+
+  uint32_t sceneInstanceCount{0};
+  uint32_t sceneRelemCount{0};
+
+  // Per-frame indirect draw commands and draw->relem mapping (updated after culling).
+  etna::Buffer indirectBuffer;    // VkDrawIndexedIndirectCommand[]
+  etna::Buffer drawMappingBuffer; // uint32_t[] — draw_id -> relemIdx
+
+
+  etna::Buffer relemVisibleCountsBuffer;   // uint[] — visible instance count per relem
+  etna::Buffer relemInstanceOffsetsBuffer; // uint[] — exclusive prefix sum of counts
+  etna::Buffer relemWriteCursorsBuffer;    // uint[] — atomic write cursors (cull_write pass)
+
   etna::PersistentDescriptorSet bindlessTextureSet;
 
   glm::mat4x4 worldViewProj;
@@ -112,14 +124,12 @@ private:
   float previousTime = 0.f;
   float deltaTime = 0.f;
 
-  // Adaptive-exposure tuning (exposed via ImGui later).
   float adaptationSpeed = 2.5f;
   float keyValue = 0.18f;
   float minExposure = 0.01f;
   float maxExposure = 100.f;
   int tonemapMode = 1; // 0 Reinhard, 1 ACES, 2 None
 
-  // Sun direction shared between sky and main BRDF for visual consistency.
   glm::vec3 sunDirection{20.f, 20.f, 20.f};
   glm::vec3 sunColor{1.0f, 0.95f, 0.85f};
   float sunIntensity = 3.0f;
@@ -132,9 +142,11 @@ private:
   etna::ComputePipeline histogramPipeline{};
   etna::ComputePipeline reducePipeline{};
   etna::GraphicsPipeline skyboxPipeline{};
+  etna::ComputePipeline cullCountPipeline{};
+  etna::ComputePipeline prefixSumPipeline{};
+  etna::ComputePipeline cullWritePipeline{};
   etna::Sampler albedoSampler{};
-  // All GPU images referenced by scene materials, indexed by TextureId
-  // Includes built-in fallback textures at the start of the array
+
   std::vector<etna::Image> sceneTextures;
 
   bool logEnabled = true;
