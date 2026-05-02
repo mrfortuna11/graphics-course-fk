@@ -23,4 +23,10 @@ target_add_shaders(bindless_and_pbr_renderer
   shaders/cull_count.comp
   shaders/prefix_sum.comp
   shaders/cull_write.comp
+  shaders/perlin.comp
+  shaders/normal.comp
+  shaders/quad.vert
+  shaders/terrain.tesc
+  shaders/terrain.tese
+  shaders/terrain.frag
 )

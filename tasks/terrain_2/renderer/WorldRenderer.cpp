@@ -16,6 +16,10 @@
 
 WorldRenderer::WorldRenderer()
   : sceneMgr{std::make_unique<SceneManager>()}
+  , perlinSampler{etna::Sampler::CreateInfo{
+      .filter = vk::Filter::eLinear,
+      .addressMode = vk::SamplerAddressMode::eClampToEdge,
+      .name = "perlin_sampler"}}
 {
 }
 
@@ -147,6 +151,20 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
     .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
     .name = "luminance_stats",
+  });
+
+  perlinTex = ctx.createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{4096, 4096, 1},
+    .name = "perlin_noise",
+    .format = vk::Format::eR32Sfloat,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+  });
+
+  normalMap = ctx.createImage(etna::Image::CreateInfo{
+    .extent = vk::Extent3D{4096, 4096, 1},
+    .name = "terrain_normal_map",
+    .format = vk::Format::eR8G8B8A8Snorm,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
   });
 }
 
@@ -392,6 +410,15 @@ void WorldRenderer::loadShaders()
     "prefix_sum", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "prefix_sum.comp.spv"});
   etna::create_program(
     "cull_write", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "cull_write.comp.spv"});
+
+  etna::create_program("perlin", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "perlin.comp.spv"});
+  etna::create_program("normal", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "normal.comp.spv"});
+  etna::create_program(
+    "terrain_render",
+    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "quad.vert.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tese.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.frag.spv"});
 }
 
 void WorldRenderer::setupPipelines(vk::Format swapchain_format)
@@ -439,6 +466,26 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
   cullCountPipeline  = pipelineManager.createComputePipeline("cull_count", {});
   prefixSumPipeline  = pipelineManager.createComputePipeline("prefix_sum", {});
   cullWritePipeline  = pipelineManager.createComputePipeline("cull_write", {});
+  perlinPipeline     = pipelineManager.createComputePipeline("perlin", {});
+  normalPipeline     = pipelineManager.createComputePipeline("normal", {});
+
+  terrainPipeline = pipelineManager.createGraphicsPipeline(
+    "terrain_render",
+    etna::GraphicsPipeline::CreateInfo{
+      .inputAssemblyConfig = {.topology = vk::PrimitiveTopology::ePatchList},
+      .rasterizationConfig =
+        vk::PipelineRasterizationStateCreateInfo{
+          .polygonMode = vk::PolygonMode::eFill,
+          .cullMode = vk::CullModeFlagBits::eBack,
+          .frontFace = vk::FrontFace::eCounterClockwise,
+          .lineWidth = 1.f,
+        },
+      .fragmentShaderOutput =
+        {
+          .colorAttachmentFormats = {vk::Format::eB10G11R11UfloatPack32},
+          .depthAttachmentFormat = vk::Format::eD32Sfloat,
+        },
+    });
 
   // Skybox: depth test enabled, depth write OFF. Vertex shader puts the
   // fullscreen tri at z = 1, so it only passes where nothing was drawn
@@ -864,6 +911,9 @@ void WorldRenderer::renderWorld(
 
     renderScene(cmd_buf, worldViewProj, staticMeshPipeline.getVkPipelineLayout());
 
+    if (selectedScene == SceneType::Terrain)
+      renderTerrain(cmd_buf);
+
     {
       ETNA_PROFILE_GPU(cmd_buf, skybox);
 
@@ -1068,6 +1118,126 @@ void WorldRenderer::renderWorld(
   }
 }
 
+void WorldRenderer::initTerrainIfNeeded()
+{
+  if (terrainInitialized)
+    return;
+
+  auto& ctx = etna::get_context();
+  auto cmdManager = ctx.createOneShotCmdMgr();
+  auto cmdBuf = cmdManager->start();
+  ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
+  createTerrainMap(cmdBuf);
+  ETNA_CHECK_VK_RESULT(cmdBuf.end());
+  cmdManager->submitAndWait(cmdBuf);
+
+  terrainInitialized = true;
+  spdlog::info("Terrain heightmap and normal map generated (4096x4096).");
+}
+
+void WorldRenderer::createTerrainMap(vk::CommandBuffer cmd_buf)
+{
+  // Pass 1: Perlin noise -> heightmap (R32F)
+  {
+    auto info = etna::get_shader_program("perlin");
+    auto binding = perlinTex.genBinding(perlinSampler.get(), vk::ImageLayout::eGeneral, {});
+    auto set = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, binding}});
+    vk::DescriptorSet vkSet = set.getVkSet();
+
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, perlinPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      perlinPipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+    etna::flush_barriers(cmd_buf);
+    cmd_buf.dispatch(4096 / 32, 4096 / 32, 1);
+  }
+
+  // Pass 2: heightmap -> normalMap (RGBA8_SNORM)
+  {
+    auto info = etna::get_shader_program("normal");
+    auto bind0 = perlinTex.genBinding(perlinSampler.get(), vk::ImageLayout::eGeneral, {});
+    auto bind1 = normalMap.genBinding(perlinSampler.get(), vk::ImageLayout::eGeneral, {});
+
+    etna::set_state(
+      cmd_buf,
+      perlinTex.get(),
+      vk::PipelineStageFlagBits2::eComputeShader,
+      vk::AccessFlagBits2::eShaderStorageRead,
+      vk::ImageLayout::eGeneral,
+      vk::ImageAspectFlagBits::eColor);
+
+    auto set = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0),
+      cmd_buf,
+      {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
+    vk::DescriptorSet vkSet = set.getVkSet();
+
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, normalPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      normalPipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+    etna::flush_barriers(cmd_buf);
+    cmd_buf.dispatch(4096 / 32, 4096 / 32, 1);
+  }
+
+  // Transition both to read-only optimal for sampling in rendering passes
+  etna::set_state(
+    cmd_buf,
+    perlinTex.get(),
+    vk::PipelineStageFlagBits2::eTessellationEvaluationShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eColor);
+
+  etna::set_state(
+    cmd_buf,
+    normalMap.get(),
+    vk::PipelineStageFlagBits2::eFragmentShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(cmd_buf);
+}
+
+void WorldRenderer::renderTerrain(vk::CommandBuffer cmd_buf)
+{
+  auto info = etna::get_shader_program("terrain_render");
+  auto bind0 = perlinTex.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+  auto bind1 = normalMap.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+
+  auto descSet = etna::create_descriptor_set(
+    info.getDescriptorLayoutId(0),
+    cmd_buf,
+    {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
+  auto vkSet = descSet.getVkSet();
+  auto layout = terrainPipeline.getVkPipelineLayout();
+
+  cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, terrainPipeline.getVkPipeline());
+  cmd_buf.bindDescriptorSets(
+    vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+
+  TerrainPushConst pc{
+    worldViewProj,
+    glm::vec4(cameraWorldPos, 0.f),
+    glm::vec4(glm::normalize(sunDirection), 0.f),
+    glm::vec4(sunColor, sunIntensity),
+  };
+  cmd_buf.pushConstants<TerrainPushConst>(
+    layout,
+    vk::ShaderStageFlagBits::eTessellationControl
+      | vk::ShaderStageFlagBits::eTessellationEvaluation
+      | vk::ShaderStageFlagBits::eFragment,
+    0,
+    {pc});
+
+  // 4 vertices per patch; instance count = number of chunks (32x32 grid)
+  const uint32_t chunkCount = (4096u * 4096u) / (128u * 128u); // = 1024
+  cmd_buf.draw(4, chunkCount, 0, 0);
+}
+
 std::filesystem::path WorldRenderer::modifyPathForBaking(std::filesystem::path path) const
 {
   if (!bakedEnabled)
@@ -1100,6 +1270,14 @@ void WorldRenderer::loadSceneByType(SceneType type)
   case SceneType::Avocado:
     path = GRAPHICS_COURSE_RESOURCES_ROOT "/scenes/Avocado/Avocado.gltf";
     break;
+  case SceneType::Terrain:
+    // No glTF for terrain; reset scene-related state so renderScene/GPU culling skip themselves.
+    sceneMgr = std::make_unique<SceneManager>();
+    sceneTextures.clear();
+    sceneInstanceCount = 0;
+    sceneRelemCount    = 0;
+    initTerrainIfNeeded();
+    return;
   }
 
   path = modifyPathForBaking(path);
@@ -1124,7 +1302,7 @@ void WorldRenderer::drawGui()
 
   bool bakedChanged = ImGui::Checkbox("Use baked scene", &bakedEnabled);
 
-  const char* scenes[] = {"SimpleMeshes", "Low Poly Dark Town", "Avocado"};
+  const char* scenes[] = {"SimpleMeshes", "Low Poly Dark Town", "Avocado", "Terrain"};
   int currentSceneIdx = static_cast<int>(selectedScene);
 
   bool sceneChanged = ImGui::Combo("Scene", &currentSceneIdx, scenes, IM_ARRAYSIZE(scenes));

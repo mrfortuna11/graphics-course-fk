@@ -25,6 +25,7 @@ public:
     SimpleMeshes,
     LowPolyDarkTown,
     Avocado,
+    Terrain,
   };
 
   WorldRenderer();
@@ -62,6 +63,10 @@ private:
   void prepareInstanceMatrices();
 
   void uploadSceneTextures();
+
+  void createTerrainMap(vk::CommandBuffer cmd_buf);
+  void initTerrainIfNeeded();
+  void renderTerrain(vk::CommandBuffer cmd_buf);
 
   std::filesystem::path modifyPathForBaking(std::filesystem::path path) const;
 
@@ -148,6 +153,23 @@ private:
   etna::Sampler albedoSampler{};
 
   std::vector<etna::Image> sceneTextures;
+
+  // Terrain
+  etna::Image perlinTex;
+  etna::Image normalMap;
+  etna::Sampler perlinSampler;
+  etna::ComputePipeline perlinPipeline{};
+  etna::ComputePipeline normalPipeline{};
+  etna::GraphicsPipeline terrainPipeline{};
+  bool terrainInitialized = false;
+
+  struct TerrainPushConst
+  {
+    glm::mat4 mProjView;
+    glm::vec4 eye;       // xyz = camera world pos
+    glm::vec4 sunDir;    // xyz = normalized direction towards sun
+    glm::vec4 sunColor;  // rgb = color, a = intensity
+  };
 
   bool logEnabled = true;
   std::uint32_t logFrameCounter = 0;
