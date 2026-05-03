@@ -15,6 +15,7 @@
 #include "wsi/Keyboard.hpp"
 
 #include "FramePacket.hpp"
+#include "ClipmapMesh.hpp"
 
 
 class WorldRenderer
@@ -154,7 +155,7 @@ private:
 
   std::vector<etna::Image> sceneTextures;
 
-  // Terrain
+  // Terrain (tessellation path)
   etna::Image perlinTex;
   etna::Image normalMap;
   etna::Sampler perlinSampler;
@@ -166,10 +167,28 @@ private:
   struct TerrainPushConst
   {
     glm::mat4 mProjView;
-    glm::vec4 eye;       // xyz = camera world pos
-    glm::vec4 sunDir;    // xyz = normalized direction towards sun
-    glm::vec4 sunColor;  // rgb = color, a = intensity
+    glm::vec4 eye;
+    glm::vec4 sunDir;
+    glm::vec4 sunColor;
   };
+
+  // Clipmap terrain path
+  std::unique_ptr<ClipmapMesh> clipmapMesh;
+  std::vector<ClipmapMesh::Footprint> clipmapFootprints;
+  etna::GraphicsPipeline clipmapTerrainPipeline{};
+
+  struct ClipmapPushConst
+  {
+    glm::mat4 mProjView;                  // 64 bytes
+    glm::vec4 sunDir;                     // xyz=sun dir, w=gridStep
+    glm::vec4 sunColor;                   // rgb=color, a=intensity
+    glm::vec4 levelOriginAndHeightScale;  // xy=levelOrigin, z=heightScale, w=unused
+    glm::vec4 fpOriginAndEye;             // xy=fpOrigin, zw=eye.xz (for future use)
+  }; // 128 bytes total
+
+  bool useClipmapTerrain = false;
+
+  void renderClipmapTerrain(vk::CommandBuffer cmd_buf);
 
   bool logEnabled = true;
   std::uint32_t logFrameCounter = 0;

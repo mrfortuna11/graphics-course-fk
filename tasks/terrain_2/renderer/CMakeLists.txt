@@ -4,6 +4,7 @@ add_executable(bindless_and_pbr_renderer
   App.cpp
   Renderer.cpp
   WorldRenderer.cpp
+  ClipmapMesh.cpp
 )
 
 target_link_libraries(bindless_and_pbr_renderer
@@ -29,4 +30,6 @@ target_add_shaders(bindless_and_pbr_renderer
   shaders/terrain.tesc
   shaders/terrain.tese
   shaders/terrain.frag
+  shaders/clipmap_terrain.vert
+  shaders/clipmap_terrain.frag
 )

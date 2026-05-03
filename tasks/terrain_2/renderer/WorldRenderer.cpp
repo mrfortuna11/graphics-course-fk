@@ -166,6 +166,9 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .format = vk::Format::eR8G8B8A8Snorm,
     .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
   });
+
+  clipmapMesh = std::make_unique<ClipmapMesh>(255, *transferHelper);
+  clipmapFootprints = clipmapMesh->buildLevelFootprints();
 }
 
 void WorldRenderer::loadScene(std::filesystem::path path)
@@ -414,6 +417,10 @@ void WorldRenderer::loadShaders()
   etna::create_program("perlin", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "perlin.comp.spv"});
   etna::create_program("normal", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "normal.comp.spv"});
   etna::create_program(
+    "clipmap_terrain",
+    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain.vert.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain.frag.spv"});
+  etna::create_program(
     "terrain_render",
     {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "quad.vert.spv",
      BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
@@ -468,6 +475,36 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
   cullWritePipeline  = pipelineManager.createComputePipeline("cull_write", {});
   perlinPipeline     = pipelineManager.createComputePipeline("perlin", {});
   normalPipeline     = pipelineManager.createComputePipeline("normal", {});
+
+  clipmapTerrainPipeline = pipelineManager.createGraphicsPipeline(
+    "clipmap_terrain",
+    etna::GraphicsPipeline::CreateInfo{
+      .vertexShaderInput =
+        etna::VertexShaderInputDescription{
+          .bindings = {etna::VertexShaderInputDescription::Binding{
+            .byteStreamDescription =
+              etna::VertexByteStreamFormatDescription{
+                .stride     = sizeof(glm::vec2),
+                .attributes = {etna::VertexByteStreamFormatDescription::Attribute{
+                  .format = vk::Format::eR32G32Sfloat,
+                  .offset = 0,
+                }},
+              },
+          }},
+        },
+      .rasterizationConfig =
+        vk::PipelineRasterizationStateCreateInfo{
+          .polygonMode = vk::PolygonMode::eFill,
+          .cullMode = vk::CullModeFlagBits::eBack,
+          .frontFace = vk::FrontFace::eCounterClockwise,
+          .lineWidth = 1.f,
+        },
+      .fragmentShaderOutput =
+        {
+          .colorAttachmentFormats = {vk::Format::eB10G11R11UfloatPack32},
+          .depthAttachmentFormat = vk::Format::eD32Sfloat,
+        },
+    });
 
   terrainPipeline = pipelineManager.createGraphicsPipeline(
     "terrain_render",
@@ -580,9 +617,9 @@ void WorldRenderer::performFrustumCulling(const glm::mat4x4& proj_view)
         for (int c = 0; c < 8; ++c)
         {
           glm::vec3 local{
-            (c & 1) ? aabb.max.x : aabb.min.x,
-            (c & 2) ? aabb.max.y : aabb.min.y,
-            (c & 4) ? aabb.max.z : aabb.min.z,
+            ((c & 1) != 0) ? aabb.max.x : aabb.min.x,
+            ((c & 2) != 0) ? aabb.max.y : aabb.min.y,
+            ((c & 4) != 0) ? aabb.max.z : aabb.min.z,
           };
           worldCorners[c] = glm::vec3(model * glm::vec4(local, 1.0f));
         }
@@ -912,7 +949,12 @@ void WorldRenderer::renderWorld(
     renderScene(cmd_buf, worldViewProj, staticMeshPipeline.getVkPipelineLayout());
 
     if (selectedScene == SceneType::Terrain)
-      renderTerrain(cmd_buf);
+    {
+      if (useClipmapTerrain)
+        renderClipmapTerrain(cmd_buf);
+      else
+        renderTerrain(cmd_buf);
+    }
 
     {
       ETNA_PROFILE_GPU(cmd_buf, skybox);
@@ -1313,6 +1355,13 @@ void WorldRenderer::drawGui()
     loadSceneByType(selectedScene);
   }
 
+  if (selectedScene == SceneType::Terrain)
+  {
+    ImGui::Separator();
+    ImGui::Text("Terrain mode");
+    ImGui::Checkbox("Use Clipmap (no tessellation)", &useClipmapTerrain);
+  }
+
   const char* debugModes[] = {
     "Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
   ImGui::Combo("Debug view", &debugMode, debugModes, IM_ARRAYSIZE(debugModes));
@@ -1332,4 +1381,48 @@ void WorldRenderer::drawGui()
     ImGui::GetIO().Framerate);
 
   ImGui::End();
+}
+
+void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
+{
+  ETNA_PROFILE_GPU(cmd_buf, clipmapTerrain);
+
+  auto info  = etna::get_shader_program("clipmap_terrain");
+  auto bind0 = perlinTex.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+  auto bind1 = normalMap.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+
+  auto descSet = etna::create_descriptor_set(
+    info.getDescriptorLayoutId(0),
+    cmd_buf,
+    {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
+  auto vkSet = descSet.getVkSet();
+  auto layout = clipmapTerrainPipeline.getVkPipelineLayout();
+
+  cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, clipmapTerrainPipeline.getVkPipeline());
+  cmd_buf.bindDescriptorSets(
+    vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+  cmd_buf.bindVertexBuffers(0, {clipmapMesh->vertexBuffer()}, {vk::DeviceSize{0}});
+  cmd_buf.bindIndexBuffer(clipmapMesh->indexBuffer(), 0, vk::IndexType::eUint32);
+
+  const uint32_t n = clipmapMesh->n();
+  const float gridStep = 1.0f;
+  const float heightScale = 200.0f;
+  const glm::vec2 levelOrigin = glm::vec2(-(static_cast<float>(n - 1) * 0.5f));
+
+  ClipmapPushConst pc{};
+  pc.mProjView                 = worldViewProj;
+  pc.sunDir                    = glm::vec4(glm::normalize(sunDirection), gridStep);
+  pc.sunColor                  = glm::vec4(sunColor, sunIntensity);
+  pc.levelOriginAndHeightScale = glm::vec4(levelOrigin, heightScale, 0.f);
+
+  for (const auto& fp : clipmapFootprints)
+  {
+    pc.fpOriginAndEye = glm::vec4(fp.localOriginGrid, cameraWorldPos.x, cameraWorldPos.z);
+    cmd_buf.pushConstants<ClipmapPushConst>(
+      layout,
+      vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+      0,
+      {pc});
+    cmd_buf.drawIndexed(fp.indexCount, 1, fp.firstIndex, fp.vertexOffset, 0);
+  }
 }
