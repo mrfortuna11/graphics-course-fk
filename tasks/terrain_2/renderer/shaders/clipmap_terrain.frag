@@ -5,36 +5,74 @@ layout(location = 0) out vec4 out_fragColor;
 
 layout(binding = 1) uniform sampler2D normalMap;
 
+layout(binding = 2) readonly buffer LevelDataBlock {
+  vec4 data[]; // xy=levelOrigin, z=gridStep, w=unused
+} levels;
+
 layout(push_constant) uniform PC
 {
   mat4  mProjView;
-  vec4  sunDir;                    // xyz = towards sun, w = gridStep
-  vec4  sunColor;                  // rgb = color, a = intensity
-  vec4  levelOriginAndHeightScale;
-  vec4  fpOriginAndEye;
+  vec4  sunDir;
+  vec4  sunColor;
+  vec4  eyeAndScale; // xyz=camera world pos, w=heightScale (negative = debug colors)
 };
 
 layout(location = 0) in vec3 wPos;
 layout(location = 1) in vec2 hmUV;
+layout(location = 2) flat in int instanceIdx;
+
+const int NUM_LEVELS = 10;
+const float GRID_SIZE = 255.0; // n
+
+vec3 levelColor(int idx)
+{
+  const vec3 colors[10] = vec3[10](
+    vec3(0.80, 0.10, 0.10),
+    vec3(0.85, 0.45, 0.10),
+    vec3(0.85, 0.80, 0.10),
+    vec3(0.40, 0.75, 0.15),
+    vec3(0.10, 0.70, 0.55),
+    vec3(0.10, 0.55, 0.85),
+    vec3(0.30, 0.15, 0.85),
+    vec3(0.65, 0.10, 0.85),
+    vec3(0.85, 0.10, 0.55),
+    vec3(0.90, 0.90, 0.90)
+  );
+  return colors[clamp(idx, 0, 9)];
+}
 
 void main()
 {
-  vec3 wNorm = normalize(texture(normalMap, hmUV).xyz);
+  // Discard fragments covered by the next inner (finer) level
+  // Instance 0 = outermost, NUM_LEVELS-1 = innermost
+  if (instanceIdx < NUM_LEVELS - 1)
+  {
+    vec4  inner      = levels.data[instanceIdx + 1];
+    vec2  innerMin   = inner.xy;
+    vec2  innerMax   = inner.xy + (GRID_SIZE - 1.0) * inner.z;
+    if (wPos.x >= innerMin.x && wPos.x <= innerMax.x &&
+        wPos.z >= innerMin.y && wPos.z <= innerMax.y)
+      discard;
+  }
 
-  const vec3 surfaceColor = vec3(0.45, 0.42, 0.35);
-  const vec3 L = normalize(sunDir.xyz);
+  bool debugLevels  = eyeAndScale.w < 0.0;
+  vec3 wNorm        = normalize(texture(normalMap, hmUV).xyz);
+  const vec3 L      = normalize(sunDir.xyz);
+  float NdotL       = max(dot(wNorm, L), 0.0);
 
-  const float NdotL      = max(dot(wNorm, L), 0.0);
-  const vec3  lightColor = sunColor.rgb * sunColor.a;
-  vec3 diffuse = surfaceColor / 3.14159265 * lightColor * NdotL;
+  vec3 surfaceColor = debugLevels
+    ? levelColor(instanceIdx)
+    : vec3(0.45, 0.42, 0.35);
+
+  vec3 diffuse = surfaceColor / 3.14159265
+    * sunColor.rgb * sunColor.a * NdotL;
 
   const vec3 SKY_ZENITH  = vec3(0.18, 0.32, 0.70);
   const vec3 SKY_HORIZON = vec3(0.78, 0.86, 0.95);
   const vec3 SKY_GROUND  = vec3(0.18, 0.16, 0.14);
   vec3 skyAmbient = wNorm.y >= 0.0
-    ? mix(SKY_HORIZON, SKY_ZENITH, smoothstep(0.0, 0.55, wNorm.y))
-    : mix(SKY_HORIZON, SKY_GROUND, smoothstep(0.0, 0.30, -wNorm.y));
-  vec3 ambient = skyAmbient * surfaceColor * 0.5;
+    ? mix(SKY_HORIZON, SKY_ZENITH,  smoothstep(0.0, 0.55,  wNorm.y))
+    : mix(SKY_HORIZON, SKY_GROUND,  smoothstep(0.0, 0.30, -wNorm.y));
 
-  out_fragColor = vec4(diffuse + ambient, 1.0);
+  out_fragColor = vec4(diffuse + skyAmbient * surfaceColor * 0.5, 1.0);
 }

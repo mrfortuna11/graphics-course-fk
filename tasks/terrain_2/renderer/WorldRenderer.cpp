@@ -20,6 +20,10 @@ WorldRenderer::WorldRenderer()
       .filter = vk::Filter::eLinear,
       .addressMode = vk::SamplerAddressMode::eClampToEdge,
       .name = "perlin_sampler"}}
+  , clipmapSampler{etna::Sampler::CreateInfo{
+      .filter = vk::Filter::eLinear,
+      .addressMode = vk::SamplerAddressMode::eRepeat,
+      .name = "clipmap_sampler"}}
 {
 }
 
@@ -168,7 +172,15 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
   });
 
   clipmapMesh = std::make_unique<ClipmapMesh>(255, *transferHelper);
-  clipmapFootprints = clipmapMesh->buildLevelFootprints();
+  clipmapFootprint = clipmapMesh->buildLevelFootprints().front();
+
+  clipmapLevelsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
+    .size        = CLIPMAP_LEVELS * sizeof(glm::vec4),
+    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
+    .memoryUsage = VMA_MEMORY_USAGE_CPU_TO_GPU,
+    .name        = "clipmap_levels",
+  });
+  clipmapLevelsBuffer.map();
 }
 
 void WorldRenderer::loadScene(std::filesystem::path path)
@@ -1360,6 +1372,8 @@ void WorldRenderer::drawGui()
     ImGui::Separator();
     ImGui::Text("Terrain mode");
     ImGui::Checkbox("Use Clipmap (no tessellation)", &useClipmapTerrain);
+    if (useClipmapTerrain)
+      ImGui::Checkbox("Debug: show LOD levels", &debugClipmapLevels);
   }
 
   const char* debugModes[] = {
@@ -1387,42 +1401,52 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapTerrain);
 
+  const float heightScale = 200.0f;
+  const float halfGrid    = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
+  const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
+
+  // Write per-level data to mapped SSBO: instance 0 = outermost, last = innermost.
+  auto* levelData = reinterpret_cast<glm::vec4*>(clipmapLevelsBuffer.data());
+  for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
+  {
+    const float step   = clipmapBaseStep * static_cast<float>(1 << level);
+    const float snap   = 2.f * step;
+    const glm::vec2 center = glm::floor(camXZ / snap) * snap;
+    const glm::vec2 origin = center - halfGrid * step;
+    levelData[CLIPMAP_LEVELS - 1 - level] = glm::vec4(origin, step, 0.f);
+  }
+
   auto info  = etna::get_shader_program("clipmap_terrain");
-  auto bind0 = perlinTex.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
-  auto bind1 = normalMap.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+  auto bind0 = perlinTex.genBinding(clipmapSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+  auto bind1 = normalMap.genBinding(clipmapSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+  auto bind2 = clipmapLevelsBuffer.genBinding();
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
-  auto vkSet = descSet.getVkSet();
+    {etna::Binding{0, bind0}, etna::Binding{1, bind1}, etna::Binding{2, bind2}});
   auto layout = clipmapTerrainPipeline.getVkPipelineLayout();
 
+  const float scaleSigned = debugClipmapLevels ? -heightScale : heightScale;
+  const ClipmapPushConst pc{
+    worldViewProj,
+    glm::vec4(glm::normalize(sunDirection), 0.f),
+    glm::vec4(sunColor, sunIntensity),
+    glm::vec4(cameraWorldPos, scaleSigned),
+  };
+
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, clipmapTerrainPipeline.getVkPipeline());
+  vk::DescriptorSet vkSet = descSet.getVkSet();
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
   cmd_buf.bindVertexBuffers(0, {clipmapMesh->vertexBuffer()}, {vk::DeviceSize{0}});
   cmd_buf.bindIndexBuffer(clipmapMesh->indexBuffer(), 0, vk::IndexType::eUint32);
+  cmd_buf.pushConstants<ClipmapPushConst>(
+    layout,
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+    0, {pc});
 
-  const uint32_t n = clipmapMesh->n();
-  const float gridStep = 1.0f;
-  const float heightScale = 200.0f;
-  const glm::vec2 levelOrigin = glm::vec2(-(static_cast<float>(n - 1) * 0.5f));
-
-  ClipmapPushConst pc{};
-  pc.mProjView                 = worldViewProj;
-  pc.sunDir                    = glm::vec4(glm::normalize(sunDirection), gridStep);
-  pc.sunColor                  = glm::vec4(sunColor, sunIntensity);
-  pc.levelOriginAndHeightScale = glm::vec4(levelOrigin, heightScale, 0.f);
-
-  for (const auto& fp : clipmapFootprints)
-  {
-    pc.fpOriginAndEye = glm::vec4(fp.localOriginGrid, cameraWorldPos.x, cameraWorldPos.z);
-    cmd_buf.pushConstants<ClipmapPushConst>(
-      layout,
-      vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-      0,
-      {pc});
-    cmd_buf.drawIndexed(fp.indexCount, 1, fp.firstIndex, fp.vertexOffset, 0);
-  }
+  cmd_buf.drawIndexed(
+    clipmapFootprint.indexCount, CLIPMAP_LEVELS,
+    clipmapFootprint.firstIndex, clipmapFootprint.vertexOffset, 0);
 }

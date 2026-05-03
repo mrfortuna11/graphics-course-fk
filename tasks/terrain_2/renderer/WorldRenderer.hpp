@@ -173,20 +173,30 @@ private:
   };
 
   // Clipmap terrain path
+  static constexpr int CLIPMAP_LEVELS = 10;
+  // Base grid step at level 0 (world units per grid cell).
+  // Level k has step = clipmapBaseStep * 2^k.
+  // With n=255 and 10 levels: outermost covers ~255 * 2^9 * 0.5 ≈ 65k world units.
+  float clipmapBaseStep = 0.5f;
+
   std::unique_ptr<ClipmapMesh> clipmapMesh;
-  std::vector<ClipmapMesh::Footprint> clipmapFootprints;
+  ClipmapMesh::Footprint clipmapFootprint; // single grid footprint (reused per level)
   etna::GraphicsPipeline clipmapTerrainPipeline{};
+  etna::Sampler clipmapSampler{}; // repeat wrap for tiling noise on outer levels
 
   struct ClipmapPushConst
   {
-    glm::mat4 mProjView;                  // 64 bytes
-    glm::vec4 sunDir;                     // xyz=sun dir, w=gridStep
-    glm::vec4 sunColor;                   // rgb=color, a=intensity
-    glm::vec4 levelOriginAndHeightScale;  // xy=levelOrigin, z=heightScale, w=unused
-    glm::vec4 fpOriginAndEye;             // xy=fpOrigin, zw=eye.xz (for future use)
-  }; // 128 bytes total
+    glm::mat4 mProjView;    // 64 bytes
+    glm::vec4 sunDir;       // xyz=normalized sun direction, w=unused
+    glm::vec4 sunColor;     // rgb=color, a=intensity
+    glm::vec4 eyeAndScale;  // xyz=camera world pos, w=heightScale
+  }; // 112 bytes
 
   bool useClipmapTerrain = false;
+  bool debugClipmapLevels = false;
+
+  // xy=levelOrigin, z=gridStep, w=unused — one entry per level, updated each frame.
+  etna::Buffer clipmapLevelsBuffer;
 
   void renderClipmapTerrain(vk::CommandBuffer cmd_buf);
 
