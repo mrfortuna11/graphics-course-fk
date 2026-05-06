@@ -217,6 +217,14 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .layers    = static_cast<std::size_t>(CLIPMAP_LEVELS),
   });
 
+  clipmapAlbedoArray = ctx.createImage(etna::Image::CreateInfo{
+    .extent    = vk::Extent3D{256, 256, 1},
+    .name      = "clipmap_albedo_array",
+    .format    = vk::Format::eR8G8B8A8Unorm,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+    .layers    = static_cast<std::size_t>(CLIPMAP_LEVELS),
+  });
+
   clipmapLevelsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
     .size        = CLIPMAP_LEVELS * sizeof(glm::vec4),
     .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
@@ -472,6 +480,8 @@ void WorldRenderer::loadShaders()
   etna::create_program(
     "clipmap_fill", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_fill.comp.spv"});
   etna::create_program(
+    "clipmap_splat", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_splat.comp.spv"});
+  etna::create_program(
     "terrain_render",
     {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "quad.vert.spv",
      BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
@@ -527,6 +537,7 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
   perlinPipeline     = pipelineManager.createComputePipeline("perlin", {});
   normalPipeline     = pipelineManager.createComputePipeline("normal", {});
   clipmapFillPipeline = pipelineManager.createComputePipeline("clipmap_fill", {});
+  clipmapSplatPipeline = pipelineManager.createComputePipeline("clipmap_splat", {});
 
   clipmapTerrainPipeline = pipelineManager.createGraphicsPipeline(
     "clipmap_terrain",
@@ -1023,7 +1034,11 @@ void WorldRenderer::renderWorld(
 
   // Fill per-level heightmap textures before entering the render pass
   if (selectedScene == SceneType::Terrain && useClipmapTerrain)
+  {
     updateClipmapHeightmaps(cmd_buf);
+    if (useMaterialClipmap)
+      updateClipmapAlbedos(cmd_buf);
+  }
 
   // Render the world into the HDR offscreen target
   {
@@ -1466,6 +1481,13 @@ void WorldRenderer::drawGui()
       ImGui::Checkbox("Debug: show LOD levels", &debugClipmapLevels);
       ImGui::Checkbox("Debug: show morph alpha", &showMorphAlpha);
       ImGui::SliderFloat("Morph width (texels)", &clipmapMorphWidth, 1.f, 64.f, "%.1f");
+
+      ImGui::Separator();
+      ImGui::Text("Splatting (procedural)");
+      ImGui::SliderFloat("Sand→Grass height",  &terrainHeightLow,      -50.f, 100.f, "%.1f");
+      ImGui::SliderFloat("Grass→Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
+      ImGui::SliderFloat("Blend sharpness",    &terrainBlendSharpness,  0.5f, 40.f,  "%.1f");
+      ImGui::SliderFloat("Rock slope thresh.", &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
     }
   }
 
@@ -1574,6 +1596,97 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
   etna::flush_barriers(cmd_buf);
 }
 
+void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
+{
+  ETNA_PROFILE_GPU(cmd_buf, clipmapSplat);
+
+  const float heightScale = 200.0f;
+  const float halfGrid    = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
+  const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
+
+  etna::set_state(
+    cmd_buf,
+    clipmapHeightmapArray.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eColor);
+
+  // Albedo: storage-write layout for the compute pass
+  etna::set_state(
+    cmd_buf,
+    clipmapAlbedoArray.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderStorageWrite,
+    vk::ImageLayout::eGeneral,
+    vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(cmd_buf);
+
+  struct SplatPC
+  {
+    glm::vec2 levelOrigin;
+    float     gridStep;
+    int32_t   levelIdx;
+    glm::vec4 splatParams;
+    float     heightScale;
+  };
+
+  auto info = etna::get_shader_program("clipmap_splat");
+  auto bindH = clipmapHeightmapArray.genBinding(
+    perlinSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  auto bindA = clipmapAlbedoArray.genBinding(
+    clipmapSampler.get(),
+    vk::ImageLayout::eGeneral,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+
+  auto descSet = etna::create_descriptor_set(
+    info.getDescriptorLayoutId(0),
+    cmd_buf,
+    {etna::Binding{0, bindH}, etna::Binding{1, bindA}});
+  vk::DescriptorSet vkSet = descSet.getVkSet();
+
+  cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, clipmapSplatPipeline.getVkPipeline());
+  cmd_buf.bindDescriptorSets(
+    vk::PipelineBindPoint::eCompute,
+    clipmapSplatPipeline.getVkPipelineLayout(),
+    0, 1, &vkSet, 0, nullptr);
+
+  const glm::vec4 splatParams4{
+    terrainHeightLow,
+    terrainHeightHigh,
+    terrainBlendSharpness,
+    terrainSlopeThreshold,
+  };
+
+  for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
+  {
+    const float step = clipmapBaseStep * static_cast<float>(1 << level);
+    const float snap = 2.f * step;
+    const glm::vec2 center = glm::floor(camXZ / snap) * snap;
+    const glm::vec2 origin = center - halfGrid * step;
+
+    const int32_t instanceIdx = CLIPMAP_LEVELS - 1 - level;
+    const SplatPC pc{origin, step, instanceIdx, splatParams4, heightScale};
+
+    cmd_buf.pushConstants<SplatPC>(
+      clipmapSplatPipeline.getVkPipelineLayout(),
+      vk::ShaderStageFlagBits::eCompute, 0, {pc});
+    cmd_buf.dispatch(16, 16, 1);
+  }
+
+  // Albedo: storage-write -> fragment-sampled
+  etna::set_state(
+    cmd_buf,
+    clipmapAlbedoArray.get(),
+    vk::PipelineStageFlagBits2::eFragmentShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(cmd_buf);
+}
+
 void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapTerrain);
@@ -1599,11 +1712,15 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
   auto bind2 = clipmapLevelsBuffer.genBinding();
+  auto bind3 = clipmapAlbedoArray.genBinding(
+    perlinSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, bind0}, etna::Binding{2, bind2}});
+    {etna::Binding{0, bind0}, etna::Binding{2, bind2}, etna::Binding{3, bind3}});
   auto layout = clipmapTerrainPipeline.getVkPipelineLayout();
 
   const float scaleSigned = debugClipmapLevels ? -heightScale : heightScale;
@@ -1612,7 +1729,16 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
     glm::vec4(glm::normalize(sunDirection), 0.f),
     glm::vec4(sunColor, sunIntensity),
     glm::vec4(cameraWorldPos, scaleSigned),
-    glm::vec4(clipmapMorphWidth, showMorphAlpha ? 1.0f : 0.0f, 0.f, 0.f),
+    glm::vec4(
+      clipmapMorphWidth,
+      showMorphAlpha ? 1.0f : 0.0f,
+      useMaterialClipmap ? 1.0f : 0.0f,
+      0.f),
+    glm::vec4(
+      terrainHeightLow,
+      terrainHeightHigh,
+      terrainBlendSharpness,
+      terrainSlopeThreshold),
   };
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, clipmapTerrainPipeline.getVkPipeline());

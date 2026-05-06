@@ -200,6 +200,10 @@ private:
   etna::Image clipmapHeightmapArray;
   etna::ComputePipeline clipmapFillPipeline{};
 
+  // Per-level RGBA8 albedo 
+  etna::Image clipmapAlbedoArray;
+  etna::ComputePipeline clipmapSplatPipeline{};
+
   struct ClipmapPushConst
   {
     glm::mat4 mProjView;    // 64 bytes
@@ -207,17 +211,28 @@ private:
     glm::vec4 sunColor;     // rgb=color, a=intensity
     glm::vec4 eyeAndScale;  // xyz=camera world pos, w=heightScale
     glm::vec4 morphParams;  // x=morphWidth (texels), y=showMorphAlpha (0/1)
-  }; // 128 bytes
+    glm::vec4 splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
+  }; // 144 bytes
 
   bool useClipmapTerrain = false;
   bool debugClipmapLevels = false;
   bool showMorphAlpha = false;
   float clipmapMorphWidth = 12.0f; // texels at the outer edge of each ring
 
+  // Procedural texture splatting
+  float terrainHeightLow      = 0.f;   // sand → grass transition height (world units)
+  float terrainHeightHigh     = 60.f;  // grass → snow transition height
+  float terrainBlendSharpness = 12.f;  // half-width of transition bands
+  float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above → rock dominates
+
+  // Material clipmap 
+  bool useMaterialClipmap = true;
+
   // xy=levelOrigin, z=gridStep
   etna::Buffer clipmapLevelsBuffer;
 
   void updateClipmapHeightmaps(vk::CommandBuffer cmd_buf);
+  void updateClipmapAlbedos(vk::CommandBuffer cmd_buf);
   void renderClipmapTerrain(vk::CommandBuffer cmd_buf);
 
   bool logEnabled = true;

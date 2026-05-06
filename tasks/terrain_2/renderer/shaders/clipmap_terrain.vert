@@ -15,7 +15,8 @@ layout(push_constant) uniform PC
   vec4  sunDir;
   vec4  sunColor;
   vec4  eyeAndScale; // xyz=camera world pos, w=heightScale (negative = debug)
-  vec4  morphParams; // x=morphWidth (texels), y=showMorphAlpha
+  vec4  morphParams; // x=morphWidth (texels), y=showMorphAlpha, z=useMaterialClipmap
+  vec4  splatParams; // splatting params (used in fragment shader)
 };
 
 const float HEIGHTMAP_SIZE = 256.0;
