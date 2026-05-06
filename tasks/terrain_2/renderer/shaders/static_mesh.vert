@@ -12,6 +12,8 @@ layout(push_constant) uniform params_t
 {
   mat4 mProjView;
   vec4 cameraPos;
+  vec4 sunDir;
+  vec4 sunColor;
   uint isBaked;
   uint debugMode;
 } params;

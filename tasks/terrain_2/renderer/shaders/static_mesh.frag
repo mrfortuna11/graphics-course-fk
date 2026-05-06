@@ -13,6 +13,11 @@ struct RelemMat
   uint occlusionIdx;
   vec4 baseColorFactor;
   vec4 materialParams;  // x=metallic, y=roughness, z=normalScale, w=occlusionStrength
+  uint emissiveIdx;
+  uint _pad0;
+  uint _pad1;
+  uint _pad2;
+  vec4 emissiveFactor;  // rgb=color
 };
 
 layout(set = 1, binding = 0) readonly buffer RelemMaterialBuffer { RelemMat data[]; } relemMats;
@@ -24,6 +29,8 @@ layout(push_constant) uniform params_t
 {
   mat4 mProjView;
   vec4 cameraPos;
+  vec4 sunDir;
+  vec4 sunColor;
   uint isBaked;
   uint debugMode;
 } params;
@@ -46,6 +53,7 @@ void main()
   const vec4 mrSample         = texture(textures[nonuniformEXT(mat.metalRoughIdx)], surf.texCoord);
   const vec3 normalSample     = texture(textures[nonuniformEXT(mat.normalIdx)],      surf.texCoord).rgb;
   const float occlusionSample = texture(textures[nonuniformEXT(mat.occlusionIdx)],   surf.texCoord).r;
+  const vec3 emissiveSample   = texture(textures[nonuniformEXT(mat.emissiveIdx)],    surf.texCoord).rgb;
 
   const vec3 albedo    = baseColorSample.rgb * mat.baseColorFactor.rgb;
   const float metallic  = mrSample.b * mat.materialParams.x;
@@ -69,11 +77,10 @@ void main()
   if (params.debugMode == 3u) { out_fragColor = vec4(metallic, roughness, 0.0, 1.0); return; }
   if (params.debugMode == 4u) { out_fragColor = vec4(vec3(ao), 1.0); return; }
 
-  const vec3 sunDir   = normalize(vec3(20.0, 20.0, 20.0));
-  const vec3 lightColor = vec3(1.0, 0.95, 0.85) * 3.0;
+  const vec3 lightColor = params.sunColor.rgb * params.sunColor.a;
   const vec3 sN = shadingNormal;
   const vec3 V = normalize(params.cameraPos.xyz - surf.wPos);
-  const vec3 L = sunDir;
+  const vec3 L = normalize(params.sunDir.xyz);
   const vec3 H = normalize(V + L);
 
   const float NdotL = max(dot(sN, L), 0.0);
@@ -115,6 +122,8 @@ void main()
   vec3 Fa = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
   vec3 ambientSpec = skyRefl * Fa * ao * (1.0 - roughness * 0.7);
 
-  out_fragColor.rgb = ambient + ambientSpec + Lo;
+  const vec3 emissive = emissiveSample * mat.emissiveFactor.rgb;
+
+  out_fragColor.rgb = ambient + ambientSpec + Lo + emissive;
   out_fragColor.a = 1.0;
 }

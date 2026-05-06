@@ -19,7 +19,8 @@ enum class TextureId : std::uint32_t
   DefaultMetallicRoughness = 1,
   DefaultNormal = 2,
   DefaultOcclusion = 3,
-  BuiltInCount = 4,
+  DefaultEmissive = 4,
+  BuiltInCount = 5,
 
   Invalid = ~std::uint32_t{0},
 };
@@ -36,8 +37,10 @@ struct Material
   TextureId metallicRoughnessTex = TextureId::DefaultMetallicRoughness;
   TextureId normalTex = TextureId::DefaultNormal;
   TextureId occlusionTex = TextureId::DefaultOcclusion;
+  TextureId emissiveTex = TextureId::DefaultEmissive;
 
   glm::vec4 baseColorFactor = glm::vec4(1.0f);
+  glm::vec3 emissiveFactor = glm::vec3(0.0f);
   float metallicFactor = 1.0f;
   float roughnessFactor = 1.0f;
   float normalScale = 1.0f;

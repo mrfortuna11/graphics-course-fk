@@ -38,18 +38,25 @@ void Renderer::initVulkan(std::span<const char*> instance_extensions)
     .shaderDrawParameters = vk::True,
   };
 
-  etna::initialize(etna::InitParams{
-    .applicationName = "bindless_and_pbr_renderer",
-    .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
-    .instanceExtensions = instanceExtensions,
-    .deviceExtensions = deviceExtensions,
-    .features = vk::PhysicalDeviceFeatures2{
-      .pNext = &vulkan11Features,
-      .features = {.multiDrawIndirect = vk::True},
-    },
-    .physicalDeviceIndexOverride = {},
-    .numFramesInFlight = 2,
-  });
+  etna::initialize(
+    etna::InitParams{
+      .applicationName = "bindless_and_pbr_renderer",
+      .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+      .instanceExtensions = instanceExtensions,
+      .deviceExtensions = deviceExtensions,
+      .features =
+        vk::PhysicalDeviceFeatures2{
+          .pNext = &vulkan11Features,
+          .features =
+            {
+              .tessellationShader = vk::True,
+              .multiDrawIndirect = vk::True,
+              .vertexPipelineStoresAndAtomics = vk::True,
+            },
+        },
+      .physicalDeviceIndexOverride = {},
+      .numFramesInFlight = 2,
+    });
 }
 
 void Renderer::initFrameDelivery(vk::UniqueSurfaceKHR a_surface, ResolutionProvider res_provider)
@@ -88,6 +95,9 @@ void Renderer::loadScene(std::filesystem::path path)
 {
   worldRenderer->loadScene(path);
 }
+
+float Renderer::findZFar() const  { return worldRenderer->findZFar(); }
+float Renderer::findZNear() const { return worldRenderer->findZNear(); }
 
 void Renderer::debugInput(const Keyboard& kb)
 {

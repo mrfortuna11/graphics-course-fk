@@ -3,10 +3,8 @@
 
 layout(location = 0) out vec4 out_fragColor;
 
-layout(binding = 1) uniform sampler2D normalMap;
-
 layout(binding = 2) readonly buffer LevelDataBlock {
-  vec4 data[]; // xy=levelOrigin, z=gridStep, w=unused
+  vec4 data[]; // xy=levelOrigin, z=gridStep
 } levels;
 
 layout(push_constant) uniform PC
@@ -15,11 +13,13 @@ layout(push_constant) uniform PC
   vec4  sunDir;
   vec4  sunColor;
   vec4  eyeAndScale; // xyz=camera world pos, w=heightScale (negative = debug colors)
+  vec4  morphParams; // x=morphWidth (texels), y=showMorphAlpha (0/1)
 };
 
 layout(location = 0) in vec3 wPos;
 layout(location = 1) in vec2 hmUV;
 layout(location = 2) flat in int instanceIdx;
+layout(location = 3) in float morphAlpha;
 
 const int NUM_LEVELS = 10;
 const float GRID_SIZE = 255.0; // n
@@ -47,18 +47,24 @@ void main()
   // Instance 0 = outermost, NUM_LEVELS-1 = innermost
   if (instanceIdx < NUM_LEVELS - 1)
   {
-    vec4  inner      = levels.data[instanceIdx + 1];
-    vec2  innerMin   = inner.xy;
-    vec2  innerMax   = inner.xy + (GRID_SIZE - 1.0) * inner.z;
+    vec4  inner    = levels.data[instanceIdx + 1];
+    vec2  innerMin = inner.xy;
+    vec2  innerMax = inner.xy + (GRID_SIZE - 1.0) * inner.z;
     if (wPos.x >= innerMin.x && wPos.x <= innerMax.x &&
         wPos.z >= innerMin.y && wPos.z <= innerMax.y)
       discard;
   }
 
-  bool debugLevels  = eyeAndScale.w < 0.0;
-  vec3 wNorm        = normalize(texture(normalMap, hmUV).xyz);
-  const vec3 L      = normalize(sunDir.xyz);
-  float NdotL       = max(dot(wNorm, L), 0.0);
+ 
+  vec3 dPdx = dFdx(wPos);
+  vec3 dPdy = dFdy(wPos);
+  vec3 wNorm = normalize(cross(dPdx, dPdy));
+  if (wNorm.y < 0.0)
+    wNorm = -wNorm;
+
+  bool debugLevels = eyeAndScale.w < 0.0;
+  const vec3 L = normalize(sunDir.xyz);
+  float NdotL  = max(dot(wNorm, L), 0.0);
 
   vec3 surfaceColor = debugLevels
     ? levelColor(instanceIdx)
@@ -74,5 +80,13 @@ void main()
     ? mix(SKY_HORIZON, SKY_ZENITH,  smoothstep(0.0, 0.55,  wNorm.y))
     : mix(SKY_HORIZON, SKY_GROUND,  smoothstep(0.0, 0.30, -wNorm.y));
 
-  out_fragColor = vec4(diffuse + skyAmbient * surfaceColor * 0.5, 1.0);
+  vec3 finalColor = diffuse + skyAmbient * surfaceColor * 0.5;
+
+  // Debug: visualize morph alpha as a green tint at the ring edges
+  if (morphParams.y > 0.5)
+  {
+    finalColor = mix(finalColor, vec3(0.05, 1.0, 0.05), morphAlpha);
+  }
+
+  out_fragColor = vec4(finalColor, 1.0);
 }

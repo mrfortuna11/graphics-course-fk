@@ -1,5 +1,6 @@
 #include "SceneManager.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <stack>
@@ -411,7 +412,59 @@ std::vector<Material> SceneManager::processMaterials(
       resolve_texture_id(model, pbr.metallicRoughnessTexture.index);
     if (metalRough != TextureId::Invalid)
       mat.metallicRoughnessTex = metalRough;
-    // Metallic-roughness stays linear — no markSrgb call.
+
+    // KHR_materials_pbrSpecularGlossiness factors to metal/rough
+    if (hasSpecGloss && metalRough == TextureId::Invalid)
+    {
+      const auto& ext = extIt->second;
+
+      float glossiness = 0.0f;
+      if (ext.Has("glossinessFactor"))
+      {
+        const auto& g = ext.Get("glossinessFactor");
+        if (g.IsNumber())
+          glossiness = static_cast<float>(g.GetNumberAsDouble());
+      }
+
+      glm::vec3 specular(0.0f);
+      if (ext.Has("specularFactor"))
+      {
+        const auto& s = ext.Get("specularFactor");
+        if (s.IsArray() && s.ArrayLen() == 3)
+        {
+          specular = glm::vec3(
+            static_cast<float>(s.Get(0).GetNumberAsDouble()),
+            static_cast<float>(s.Get(1).GetNumberAsDouble()),
+            static_cast<float>(s.Get(2).GetNumberAsDouble()));
+        }
+      }
+
+      const float maxSpec = std::max({specular.r, specular.g, specular.b});
+      const float maxDiff = std::max(
+        {mat.baseColorFactor.r, mat.baseColorFactor.g, mat.baseColorFactor.b});
+      constexpr float kDielectricF0 = 0.04f;
+
+      float metallic = 0.0f;
+      if (maxSpec > kDielectricF0)
+      {
+        if (maxDiff < kDielectricF0)
+        {
+          metallic = 1.0f;
+          mat.baseColorFactor = glm::vec4(specular, mat.baseColorFactor.a);
+        }
+        else
+        {
+          metallic = glm::clamp(
+            (maxSpec - kDielectricF0) / (1.0f - kDielectricF0), 0.0f, 1.0f);
+          const glm::vec3 blended =
+            glm::mix(glm::vec3(mat.baseColorFactor), specular, metallic);
+          mat.baseColorFactor = glm::vec4(blended, mat.baseColorFactor.a);
+        }
+      }
+
+      mat.metallicFactor = metallic;
+      mat.roughnessFactor = glm::clamp(1.0f - glossiness, 0.0f, 1.0f);
+    }
 
     const TextureId normal = resolve_texture_id(model, gm.normalTexture.index);
     if (normal != TextureId::Invalid)
@@ -425,6 +478,20 @@ std::vector<Material> SceneManager::processMaterials(
     {
       mat.occlusionTex = occlusion;
       mat.occlusionStrength = static_cast<float>(gm.occlusionTexture.strength);
+    }
+
+    if (gm.emissiveFactor.size() == 3)
+    {
+      mat.emissiveFactor = glm::vec3(
+        static_cast<float>(gm.emissiveFactor[0]),
+        static_cast<float>(gm.emissiveFactor[1]),
+        static_cast<float>(gm.emissiveFactor[2]));
+    }
+    const TextureId emissive = resolve_texture_id(model, gm.emissiveTexture.index);
+    if (emissive != TextureId::Invalid)
+    {
+      mat.emissiveTex = emissive;
+      markSrgb(gm.emissiveTexture.index);
     }
 
     mat.doubleSided = gm.doubleSided;
@@ -445,15 +512,17 @@ std::vector<SceneManager::SceneTexture> SceneManager::processTextures(
   result.push_back(SceneTexture{
     .width = 1, .height = 1, .rgba8 = {255u, 255u, 255u, 255u}, .isSrgb = true});
   // [1] DefaultMetallicRoughness — linear. Roughness in G, metallic in B.
-  //     (0, 255, 0, 255) ⇒ roughness=1, metallic=0 (fully rough dielectric).
   result.push_back(SceneTexture{
-    .width = 1, .height = 1, .rgba8 = {0u, 255u, 0u, 255u}, .isSrgb = false});
+    .width = 1, .height = 1, .rgba8 = {255u, 255u, 255u, 255u}, .isSrgb = false});
   // [2] DefaultNormal — neutral tangent-space normal (0.5, 0.5, 1.0) linear.
   result.push_back(SceneTexture{
     .width = 1, .height = 1, .rgba8 = {128u, 128u, 255u, 255u}, .isSrgb = false});
   // [3] DefaultOcclusion — white linear (occlusion=1, i.e. no occlusion).
   result.push_back(SceneTexture{
     .width = 1, .height = 1, .rgba8 = {255u, 255u, 255u, 255u}, .isSrgb = false});
+  // [4] DefaultEmissive — white sRGB (emissiveFactor multiplies this; default factor=0).
+  result.push_back(SceneTexture{
+    .width = 1, .height = 1, .rgba8 = {255u, 255u, 255u, 255u}, .isSrgb = true});
 
   for (std::size_t i = 0; i < model.images.size(); ++i)
   {

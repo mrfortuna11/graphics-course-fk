@@ -30,15 +30,18 @@ public:
   void update(const FramePacket& packet);
   void drawFrame();
 
+  float findZFar() const;
+  float findZNear() const;
+
 private:
   ResolutionProvider resolutionProvider;
 
   std::unique_ptr<etna::Window> window;
-  std::unique_ptr<etna::PerFrameCmdMgr> commandManager;
 
   glm::uvec2 resolution;
   bool useVsync = true;
 
   std::unique_ptr<WorldRenderer> worldRenderer;
   std::unique_ptr<ImGuiRenderer> guiRenderer;
+  std::unique_ptr<etna::PerFrameCmdMgr> commandManager;
 };

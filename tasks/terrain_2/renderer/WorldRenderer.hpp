@@ -25,6 +25,7 @@ public:
   {
     SimpleMeshes,
     LowPolyDarkTown,
+    LovelyTown,
     Avocado,
     Terrain,
   };
@@ -41,6 +42,10 @@ public:
   void debugInput(const Keyboard& kb);
   void update(const FramePacket& packet);
   void drawGui();
+
+  float findZFar() const;
+  float findZNear() const;
+
   void renderWorld(
     vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view);
 
@@ -89,6 +94,8 @@ private:
     glm::mat4x4 proj_view;
     // xyz=world-space camera position (needed for Fresnel / view vector), w unused
     glm::vec4 cameraPos{0.f, 0.f, 0.f, 0.f};
+    glm::vec4 sunDir{0.f, 1.f, 0.f, 0.f};
+    glm::vec4 sunColor{1.f, 1.f, 1.f, 1.f}; // rgb=color, a=intensity
     uint32_t isBaked{0};
     uint32_t debugMode{0};
   } pushConst;
@@ -101,6 +108,11 @@ private:
     uint32_t occlusionIdx;
     glm::vec4 baseColorFactor;
     glm::vec4 materialParams;
+    uint32_t emissiveIdx;
+    uint32_t _pad0;
+    uint32_t _pad1;
+    uint32_t _pad2;
+    glm::vec4 emissiveFactor; // rgb=color, a unused
   };
   etna::Buffer relemMaterialsBuffer;
 
@@ -177,9 +189,6 @@ private:
 
   // Clipmap terrain path
   static constexpr int CLIPMAP_LEVELS = 10;
-  // Base grid step at level 0 (world units per grid cell).
-  // Level k has step = clipmapBaseStep * 2^k.
-  // With n=255 and 10 levels: outermost covers ~255 * 2^9 * 0.5 ≈ 65k world units.
   float clipmapBaseStep = 0.5f;
 
   std::unique_ptr<ClipmapMesh> clipmapMesh;
@@ -187,25 +196,31 @@ private:
   etna::GraphicsPipeline clipmapTerrainPipeline{};
   etna::Sampler clipmapSampler{}; // repeat wrap for tiling noise on outer levels
 
+  // Per-level 256x256 heightmap array (one layer per clipmap level, filled each frame)
+  etna::Image clipmapHeightmapArray;
+  etna::ComputePipeline clipmapFillPipeline{};
+
   struct ClipmapPushConst
   {
     glm::mat4 mProjView;    // 64 bytes
-    glm::vec4 sunDir;       // xyz=normalized sun direction, w=unused
+    glm::vec4 sunDir;       // xyz=normalized sun direction
     glm::vec4 sunColor;     // rgb=color, a=intensity
     glm::vec4 eyeAndScale;  // xyz=camera world pos, w=heightScale
-  }; // 112 bytes
+    glm::vec4 morphParams;  // x=morphWidth (texels), y=showMorphAlpha (0/1)
+  }; // 128 bytes
 
   bool useClipmapTerrain = false;
   bool debugClipmapLevels = false;
+  bool showMorphAlpha = false;
+  float clipmapMorphWidth = 12.0f; // texels at the outer edge of each ring
 
-  // xy=levelOrigin, z=gridStep, w=unused — one entry per level, updated each frame.
+  // xy=levelOrigin, z=gridStep
   etna::Buffer clipmapLevelsBuffer;
 
+  void updateClipmapHeightmaps(vk::CommandBuffer cmd_buf);
   void renderClipmapTerrain(vk::CommandBuffer cmd_buf);
 
   bool logEnabled = true;
-  // std::uint32_t logFrameCounter = 0;
-
   bool bakedEnabled = false;
   SceneType selectedScene = SceneType::LowPolyDarkTown;
   float imguiScale = 1.5f;

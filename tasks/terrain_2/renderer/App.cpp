@@ -73,6 +73,9 @@ void App::drawFrame()
 {
   ZoneScoped;
 
+  mainCam.zNear = renderer->findZNear();
+  mainCam.zFar  = renderer->findZFar();
+
   renderer->update(FramePacket{
     .mainCam = mainCam,
     .currentTime = static_cast<float>(windowing.getTime()),

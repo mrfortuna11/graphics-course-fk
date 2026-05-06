@@ -17,7 +17,7 @@ public:
   };
 
   
-  explicit ClipmapMesh(uint32_t n, etna::BlockingTransferHelper& transferHelper);
+  explicit ClipmapMesh(uint32_t n, etna::BlockingTransferHelper& transfer_helper);
 
  
   std::vector<Footprint> buildLevelFootprints() const;
@@ -28,7 +28,7 @@ public:
   uint32_t n() const { return n_; }
 
 private:
-  void buildGeometry(etna::BlockingTransferHelper& transferHelper);
+  void buildGeometry(etna::BlockingTransferHelper& transfer_helper);
 
   uint32_t n_;
   etna::Buffer vbo;
