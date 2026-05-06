@@ -225,7 +225,7 @@ private:
   float terrainBlendSharpness = 12.f;  // half-width of transition bands
   float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above → rock dominates
 
-  // Material clipmap 
+  // Material clipmap
   bool useMaterialClipmap = true;
 
   // xy=levelOrigin, z=gridStep

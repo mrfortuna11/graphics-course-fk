@@ -10,11 +10,14 @@ layout(binding = 1, rgba8) writeonly uniform image2DArray albedoArray;
 
 layout(push_constant) uniform PC
 {
-  vec2  levelOrigin;  // world XZ of texel (0,0)
-  float gridStep;     // world units per texel
-  int   levelIdx;
-  vec4  splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
-  float heightScale;  // raw_h * heightScale = world-space Y
+  // Order matches C++ SplatPC: scalars first, vec4 last so the struct ends on a
+  // 16-byte boundary and sizeof in C++ matches the GLSL block size (48 bytes).
+  vec2  levelOrigin;  // world XZ of texel (0,0); offset 0
+  float gridStep;     // world units per texel  ; offset 8
+  int   levelIdx;     //                          offset 12
+  float heightScale;  // raw_h * heightScale = world-space Y; offset 16
+  // 12 bytes implicit padding here (vec4 must align to 32)
+  vec4  splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold; offset 32
 };
 
 const float HEIGHTMAP_SIZE = 256.0;

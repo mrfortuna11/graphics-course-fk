@@ -1475,7 +1475,7 @@ void WorldRenderer::drawGui()
   {
     ImGui::Separator();
     ImGui::Text("Terrain mode");
-    ImGui::Checkbox("Use Clipmap (no tessellation)", &useClipmapTerrain);
+    ImGui::Checkbox("Use Clipmap", &useClipmapTerrain);
     if (useClipmapTerrain)
     {
       ImGui::Checkbox("Debug: show LOD levels", &debugClipmapLevels);
@@ -1483,11 +1483,20 @@ void WorldRenderer::drawGui()
       ImGui::SliderFloat("Morph width (texels)", &clipmapMorphWidth, 1.f, 64.f, "%.1f");
 
       ImGui::Separator();
-      ImGui::Text("Splatting (procedural)");
-      ImGui::SliderFloat("Sand→Grass height",  &terrainHeightLow,      -50.f, 100.f, "%.1f");
-      ImGui::SliderFloat("Grass→Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
+      ImGui::Text("Splatting");
+      ImGui::Checkbox("Use material clipmap (cache)", &useMaterialClipmap);
+      ImGui::SameLine();
+      ImGui::TextDisabled("(?)");
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+          "ON : albedo baked to per-level texture by compute,\n"
+          "     fragment shader does 1 texture sample.\n"
+          "OFF: albedo computed live per fragment.");
+
+      ImGui::SliderFloat("Sand-Grass height",  &terrainHeightLow,      -50.f, 100.f, "%.1f");
+      ImGui::SliderFloat("Grass-Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
       ImGui::SliderFloat("Blend sharpness",    &terrainBlendSharpness,  0.5f, 40.f,  "%.1f");
-      ImGui::SliderFloat("Rock slope thresh.", &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
+      ImGui::SliderFloat("Rock slope", &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
     }
   }
 
@@ -1502,7 +1511,7 @@ void WorldRenderer::drawGui()
   ImGui::SliderFloat("Adaptation speed", &adaptationSpeed, 0.1f, 10.f, "%.2f");
   ImGui::SliderFloat("Key value", &keyValue, 0.01f, 1.0f, "%.3f");
   ImGui::SliderFloat("Min exposure", &minExposure, 0.001f, 1.f, "%.3f");
-  ImGui::SliderFloat("Max exposure", &maxExposure, 1.f, 1000.f, "%.1f");
+  ImGui::SliderFloat("Max exposure", &maxExposure, 1.f, 100.f, "%.1f");
 
   ImGui::Text(
     "Application average %.1f ms/frame (%.1f FPS)",
@@ -1624,12 +1633,18 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
 
   struct SplatPC
   {
-    glm::vec2 levelOrigin;
-    float     gridStep;
-    int32_t   levelIdx;
-    glm::vec4 splatParams;
-    float     heightScale;
-  };
+    glm::vec2 levelOrigin;   // offset  0
+    float     gridStep;      // offset  8
+    int32_t   levelIdx;      // offset 12
+    float     heightScale;   // offset 16
+    // GLSL std430 push constants align vec4 to multiples of 16 → splatParams at 32.
+    // GLM in this project is built without GLM_FORCE_DEFAULT_ALIGNED_GENTYPES so
+    // alignof(glm::vec4)=4 and we must pad explicitly to match the GLSL layout.
+    uint32_t  _pad0;         // offset 20
+    uint32_t  _pad1;         // offset 24
+    uint32_t  _pad2;         // offset 28
+    glm::vec4 splatParams;   // offset 32
+  }; // sizeof = 48, matches GLSL block size
 
   auto info = etna::get_shader_program("clipmap_splat");
   auto bindH = clipmapHeightmapArray.genBinding(
@@ -1668,7 +1683,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     const glm::vec2 origin = center - halfGrid * step;
 
     const int32_t instanceIdx = CLIPMAP_LEVELS - 1 - level;
-    const SplatPC pc{origin, step, instanceIdx, splatParams4, heightScale};
+    const SplatPC pc{origin, step, instanceIdx, heightScale, 0, 0, 0, splatParams4};
 
     cmd_buf.pushConstants<SplatPC>(
       clipmapSplatPipeline.getVkPipelineLayout(),
