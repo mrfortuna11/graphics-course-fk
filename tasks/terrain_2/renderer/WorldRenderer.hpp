@@ -200,9 +200,19 @@ private:
   etna::Image clipmapHeightmapArray;
   etna::ComputePipeline clipmapFillPipeline{};
 
-  // Per-level RGBA8 albedo 
+  // Per-level RGBA8 albedo (with mip chain for trilinear minification).
+  static constexpr uint32_t CLIPMAP_ALBEDO_MIPS = 8; // 256, 128, 64, 32, 16, 8, 4, 2
   etna::Image clipmapAlbedoArray;
   etna::ComputePipeline clipmapSplatPipeline{};
+
+  // Tileable detail noise (512x512 R32F + mips). Generated once at startup,
+  // sampled by clipmap_fill.comp with per-level LOD for seamless inter-level transitions.
+  static constexpr uint32_t DETAIL_TEX_SIZE = 512;
+  static constexpr uint32_t DETAIL_TEX_MIPS = 9; // log2(512) + 1
+  etna::Image detailTex;
+  etna::ComputePipeline detailGenPipeline{};
+  bool detailTexInitialized = false;
+  void initDetailTexture(vk::CommandBuffer cmd_buf);
 
   struct ClipmapPushConst
   {
@@ -214,19 +224,25 @@ private:
     glm::vec4 splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
   }; // 144 bytes
 
-  bool useClipmapTerrain = false;
+  bool useClipmapTerrain = true;
   bool debugClipmapLevels = false;
   bool showMorphAlpha = false;
   float clipmapMorphWidth = 12.0f; // texels at the outer edge of each ring
 
   // Procedural texture splatting
-  float terrainHeightLow      = 0.f;   // sand → grass transition height (world units)
-  float terrainHeightHigh     = 60.f;  // grass → snow transition height
+  float terrainHeightLow      = 0.f;   // sand -> grass transition height (world units)
+  float terrainHeightHigh     = 60.f;  // grass -> snow transition height
   float terrainBlendSharpness = 12.f;  // half-width of transition bands
-  float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above → rock dominates
+  float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above -> rock dominates
 
   // Material clipmap
   bool useMaterialClipmap = true;
+
+  // Heightmap shape parameters (passed to clipmap_fill.comp).
+  float terrainHeightScale     = 200.f;  // overall vertical amplitude (world units)
+  float terrainHillsWeight     = 1.0f;   // perlin(p) at 256m: always-bumpy hills
+  float terrainRidgesWeight    = 1.2f;   // abs(perlin(p*0.125)) at 2048m: mountain ridges (positive-only uplift)
+  float terrainDetailAmplitude = 0.025f; // detail tile amplitude (~±5m at heightScale=200)
 
   // xy=levelOrigin, z=gridStep
   etna::Buffer clipmapLevelsBuffer;

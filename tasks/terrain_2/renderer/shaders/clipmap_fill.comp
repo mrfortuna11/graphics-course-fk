@@ -3,13 +3,21 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, r32f) restrict writeonly uniform image2DArray heightmapArray;
+layout(binding = 1) uniform sampler2D detailTex;
 
 layout(push_constant) uniform PC
 {
-  vec2  levelOrigin; // world XZ of texel (0,0)
-  float gridStep;    // world units per texel
+  vec2  levelOrigin;      // world XZ of texel (0,0)
+  float gridStep;         // world units per texel
   int   levelIdx;
+  float hillsWeight;      // weight of perlin(p) at 256m
+  float ridgesWeight;     // weight of abs(perlin(p*0.125)) at 2048m
+  float detailAmplitude;  // strength of detail tile contribution
 };
+
+const float DETAIL_WORLD_PERIOD = 256.0; // tile repeats every 256m
+const float DETAIL_TEX_SIZE     = 512.0;
+const float DETAIL_MAX_LOD      = 8.0;
 
 vec2 randomGradient(in ivec2 coord)
 {
@@ -52,11 +60,15 @@ void main()
 
   vec2 worldXZ = levelOrigin + vec2(c) * gridStep;
 
-  // perlin(texelCoord / 1024)  where texelCoord = (worldXZ + 512) * 4
-  // => perlin((worldXZ + 512) / 256)
   vec2 p = (worldXZ + 512.0) / 256.0;
-  float h = mix(perlin(p), perlin(p * 8.0), 0.2);
-  h       = mix(h,         perlin(p * 64.0), 0.01);
+  float hills  = perlin(p);
+  float ridges = abs(perlin(p * 0.125));
+  float h = (hills * hillsWeight + ridges * ridgesWeight)
+          / max(hillsWeight + ridgesWeight, 0.01);
+
+  float detailLod = clamp(
+    log2(gridStep * DETAIL_TEX_SIZE / DETAIL_WORLD_PERIOD), 0.0, DETAIL_MAX_LOD);
+  h += textureLod(detailTex, worldXZ / DETAIL_WORLD_PERIOD, detailLod).r * detailAmplitude;
 
   imageStore(heightmapArray, ivec3(c, levelIdx), vec4(h, 0.0, 0.0, 0.0));
 }

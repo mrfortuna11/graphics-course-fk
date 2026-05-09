@@ -221,8 +221,19 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .extent    = vk::Extent3D{256, 256, 1},
     .name      = "clipmap_albedo_array",
     .format    = vk::Format::eR8G8B8A8Unorm,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+                | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
     .layers    = static_cast<std::size_t>(CLIPMAP_LEVELS),
+    .mipLevels = static_cast<std::size_t>(CLIPMAP_ALBEDO_MIPS),
+  });
+
+  detailTex = ctx.createImage(etna::Image::CreateInfo{
+    .extent     = vk::Extent3D{DETAIL_TEX_SIZE, DETAIL_TEX_SIZE, 1},
+    .name       = "clipmap_detail_tile",
+    .format     = vk::Format::eR32Sfloat,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
+                | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+    .mipLevels  = static_cast<std::size_t>(DETAIL_TEX_MIPS),
   });
 
   clipmapLevelsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
@@ -482,6 +493,8 @@ void WorldRenderer::loadShaders()
   etna::create_program(
     "clipmap_splat", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_splat.comp.spv"});
   etna::create_program(
+    "detail_gen", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "detail_gen.comp.spv"});
+  etna::create_program(
     "terrain_render",
     {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "quad.vert.spv",
      BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
@@ -538,6 +551,7 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
   normalPipeline     = pipelineManager.createComputePipeline("normal", {});
   clipmapFillPipeline = pipelineManager.createComputePipeline("clipmap_fill", {});
   clipmapSplatPipeline = pipelineManager.createComputePipeline("clipmap_splat", {});
+  detailGenPipeline    = pipelineManager.createComputePipeline("detail_gen", {});
 
   clipmapTerrainPipeline = pipelineManager.createGraphicsPipeline(
     "clipmap_terrain",
@@ -1483,6 +1497,24 @@ void WorldRenderer::drawGui()
       ImGui::SliderFloat("Morph width (texels)", &clipmapMorphWidth, 1.f, 64.f, "%.1f");
 
       ImGui::Separator();
+      ImGui::Text("Terrain shape");
+      ImGui::SliderFloat("Height scale (m)",     &terrainHeightScale,     10.f, 600.f, "%.0f");
+      ImGui::SliderFloat("Hills weight",         &terrainHillsWeight,      0.f,   3.f, "%.2f");
+      ImGui::SliderFloat("Ridges weight",        &terrainRidgesWeight,     0.f,   3.f, "%.2f");
+      ImGui::SliderFloat("Detail amplitude",     &terrainDetailAmplitude,  0.f,  0.1f, "%.3f");
+      ImGui::SameLine();
+      ImGui::TextDisabled("(?)");
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+          "Height scale  : overall vertical size of the terrain.\n"
+          "Hills weight  : symmetric ±height noise (period ~256m).\n"
+          "                Higher -> more uniform bumps everywhere.\n"
+          "Ridges weight : positive-only uplift (period ~2048m).\n"
+          "                Higher -> more dramatic mountain ranges,\n"
+          "                shallower valleys.\n"
+          "Detail ampl.  : fine-grain bumps from the detail tile.");
+
+      ImGui::Separator();
       ImGui::Text("Splatting");
       ImGui::Checkbox("Use material clipmap (cache)", &useMaterialClipmap);
       ImGui::SameLine();
@@ -1544,9 +1576,172 @@ float WorldRenderer::findZNear() const
   return 0.01f;
 }
 
+void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
+{
+  if (detailTexInitialized)
+    return;
+
+  ETNA_PROFILE_GPU(cmd_buf, clipmapDetailGen);
+
+  // mip 0: undefined -> eGeneral for compute write
+  // (subsequent mips will be transitioned within the blit chain).
+  {
+    vk::ImageMemoryBarrier2 toGeneral{
+      .srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands,
+      .srcAccessMask = {},
+      .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+      .oldLayout     = vk::ImageLayout::eUndefined,
+      .newLayout     = vk::ImageLayout::eGeneral,
+      .image         = detailTex.get(),
+      .subresourceRange = vk::ImageSubresourceRange{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel   = 0,
+        .levelCount     = DETAIL_TEX_MIPS,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+    };
+    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers    = &toGeneral,
+    });
+  }
+
+  // Run detail_gen on mip 0 (single 2D image bind, mip 0 only for storage write).
+  {
+    auto info = etna::get_shader_program("detail_gen");
+    auto bind = detailTex.genBinding(
+      perlinSampler.get(),
+      vk::ImageLayout::eGeneral,
+      etna::Image::ViewParams{.baseMip = 0, .levelCount = 1});
+    auto descSet = etna::create_descriptor_set(
+      info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind}});
+    vk::DescriptorSet vkSet = descSet.getVkSet();
+
+    cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, detailGenPipeline.getVkPipeline());
+    cmd_buf.bindDescriptorSets(
+      vk::PipelineBindPoint::eCompute,
+      detailGenPipeline.getVkPipelineLayout(),
+      0, 1, &vkSet, 0, nullptr);
+    // 512 / 16 = 32 groups
+    cmd_buf.dispatch(DETAIL_TEX_SIZE / 16, DETAIL_TEX_SIZE / 16, 1);
+  }
+
+  // Generate mip chain via linear blits (mip 0 -> 1 -> 2 -> ...).
+  // mip 0: compute write -> blit read
+  {
+    vk::ImageMemoryBarrier2 b{
+      .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+      .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+      .oldLayout     = vk::ImageLayout::eGeneral,
+      .newLayout     = vk::ImageLayout::eGeneral,
+      .image         = detailTex.get(),
+      .subresourceRange = vk::ImageSubresourceRange{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel   = 0,
+        .levelCount     = 1,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+    };
+    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers    = &b,
+    });
+  }
+
+  int srcW = static_cast<int>(DETAIL_TEX_SIZE);
+  int srcH = static_cast<int>(DETAIL_TEX_SIZE);
+  for (uint32_t i = 1; i < DETAIL_TEX_MIPS; ++i)
+  {
+    const int dstW = std::max(srcW / 2, 1);
+    const int dstH = std::max(srcH / 2, 1);
+
+    vk::ImageBlit blit{
+      .srcSubresource = vk::ImageSubresourceLayers{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .mipLevel       = i - 1,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+      .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{srcW, srcH, 1}},
+      .dstSubresource = vk::ImageSubresourceLayers{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .mipLevel       = i,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+      .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
+    };
+    cmd_buf.blitImage(
+      detailTex.get(), vk::ImageLayout::eGeneral,
+      detailTex.get(), vk::ImageLayout::eGeneral,
+      1, &blit, vk::Filter::eLinear);
+
+    if (i + 1 < DETAIL_TEX_MIPS)
+    {
+      vk::ImageMemoryBarrier2 b{
+        .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .oldLayout     = vk::ImageLayout::eGeneral,
+        .newLayout     = vk::ImageLayout::eGeneral,
+        .image         = detailTex.get(),
+        .subresourceRange = vk::ImageSubresourceRange{
+          .aspectMask     = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel   = i,
+          .levelCount     = 1,
+          .baseArrayLayer = 0,
+          .layerCount     = 1,
+        },
+      };
+      cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers    = &b,
+      });
+    }
+
+    srcW = dstW;
+    srcH = dstH;
+  }
+
+  // Final: all mips -> eShaderReadOnlyOptimal for use in clipmap_fill compute (and beyond).
+  {
+    vk::ImageMemoryBarrier2 toReadOnly{
+      .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+      .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+      .oldLayout     = vk::ImageLayout::eGeneral,
+      .newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal,
+      .image         = detailTex.get(),
+      .subresourceRange = vk::ImageSubresourceRange{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel   = 0,
+        .levelCount     = DETAIL_TEX_MIPS,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+    };
+    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers    = &toReadOnly,
+    });
+  }
+
+  detailTexInitialized = true;
+}
+
 void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapFill);
+
+  // Lazily generate the detail tile once on first use.
+  initDetailTexture(cmd_buf);
 
   const float halfGrid = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
   const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
@@ -1560,15 +1755,28 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
     vk::ImageAspectFlagBits::eColor);
   etna::flush_barriers(cmd_buf);
 
-  struct FillPC { glm::vec2 levelOrigin; float gridStep; int levelIdx; };
+  struct FillPC
+  {
+    glm::vec2 levelOrigin;
+    float     gridStep;
+    int32_t   levelIdx;
+    float     hillsWeight;
+    float     ridgesWeight;
+    float     detailAmplitude;
+  };
 
   auto fillInfo = etna::get_shader_program("clipmap_fill");
   auto fillBind = clipmapHeightmapArray.genBinding(
     clipmapSampler.get(),
     vk::ImageLayout::eGeneral,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  // Detail tile: REPEAT-wrapped sampler for tiling.
+  auto detailBind = detailTex.genBinding(
+    clipmapSampler.get(), // eRepeat addressMode for tile wrapping
+    vk::ImageLayout::eShaderReadOnlyOptimal);
   auto fillSet = etna::create_descriptor_set(
-    fillInfo.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, fillBind}});
+    fillInfo.getDescriptorLayoutId(0), cmd_buf,
+    {etna::Binding{0, fillBind}, etna::Binding{1, detailBind}});
   vk::DescriptorSet fillVkSet = fillSet.getVkSet();
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, clipmapFillPipeline.getVkPipeline());
@@ -1585,7 +1793,14 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
     const glm::vec2 origin = center - halfGrid * step;
 
     const int instanceIdx = CLIPMAP_LEVELS - 1 - level;
-    const FillPC pc{origin, step, instanceIdx};
+    const FillPC pc{
+      origin,
+      step,
+      instanceIdx,
+      terrainHillsWeight,
+      terrainRidgesWeight,
+      terrainDetailAmplitude,
+    };
     cmd_buf.pushConstants<FillPC>(
       clipmapFillPipeline.getVkPipelineLayout(),
       vk::ShaderStageFlagBits::eCompute, 0, {pc});
@@ -1609,7 +1824,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapSplat);
 
-  const float heightScale = 200.0f;
+  const float heightScale = terrainHeightScale;
   const float halfGrid    = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
   const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
 
@@ -1621,29 +1836,44 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     vk::ImageLayout::eShaderReadOnlyOptimal,
     vk::ImageAspectFlagBits::eColor);
 
-  // Albedo: storage-write layout for the compute pass
-  etna::set_state(
-    cmd_buf,
-    clipmapAlbedoArray.get(),
-    vk::PipelineStageFlagBits2::eComputeShader,
-    vk::AccessFlagBits2::eShaderStorageWrite,
-    vk::ImageLayout::eGeneral,
-    vk::ImageAspectFlagBits::eColor);
   etna::flush_barriers(cmd_buf);
+
+  // Albedo: raw barriers, since etna's set_state can't track per-mip layouts
+  // and we need different layouts for src/dst during mip blit chain.
+  // Old layout = eUndefined: we re-bake every frame, so previous data is discarded.
+  {
+    vk::ImageMemoryBarrier2 toGeneral{
+      .srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands,
+      .srcAccessMask = {},
+      .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+      .oldLayout     = vk::ImageLayout::eUndefined,
+      .newLayout     = vk::ImageLayout::eGeneral,
+      .image         = clipmapAlbedoArray.get(),
+      .subresourceRange = vk::ImageSubresourceRange{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel   = 0,
+        .levelCount     = CLIPMAP_ALBEDO_MIPS,
+        .baseArrayLayer = 0,
+        .layerCount     = CLIPMAP_LEVELS,
+      },
+    };
+    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers    = &toGeneral,
+    });
+  }
 
   struct SplatPC
   {
-    glm::vec2 levelOrigin;   // offset  0
-    float     gridStep;      // offset  8
-    int32_t   levelIdx;      // offset 12
-    float     heightScale;   // offset 16
-    // GLSL std430 push constants align vec4 to multiples of 16 → splatParams at 32.
-    // GLM in this project is built without GLM_FORCE_DEFAULT_ALIGNED_GENTYPES so
-    // alignof(glm::vec4)=4 and we must pad explicitly to match the GLSL layout.
-    uint32_t  _pad0;         // offset 20
-    uint32_t  _pad1;         // offset 24
-    uint32_t  _pad2;         // offset 28
-    glm::vec4 splatParams;   // offset 32
+    glm::vec2 levelOrigin;   
+    float     gridStep;      
+    int32_t   levelIdx;      
+    float     heightScale;   
+    uint32_t  _pad0;         
+    uint32_t  _pad1;         
+    uint32_t  _pad2;         
+    glm::vec4 splatParams;   
   }; // sizeof = 48, matches GLSL block size
 
   auto info = etna::get_shader_program("clipmap_splat");
@@ -1651,10 +1881,15 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  // Storage-image view must be single-mip; bind only mip 0 for the compute write.
   auto bindA = clipmapAlbedoArray.genBinding(
     clipmapSampler.get(),
     vk::ImageLayout::eGeneral,
-    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+    etna::Image::ViewParams{
+      .baseMip    = 0,
+      .levelCount = 1,
+      .type       = vk::ImageViewType::e2DArray,
+    });
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
@@ -1691,22 +1926,119 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     cmd_buf.dispatch(16, 16, 1);
   }
 
-  // Albedo: storage-write -> fragment-sampled
-  etna::set_state(
-    cmd_buf,
-    clipmapAlbedoArray.get(),
-    vk::PipelineStageFlagBits2::eFragmentShader,
-    vk::AccessFlagBits2::eShaderSampledRead,
-    vk::ImageLayout::eShaderReadOnlyOptimal,
-    vk::ImageAspectFlagBits::eColor);
-  etna::flush_barriers(cmd_buf);
+  // Mip generation: blit each mip from the previous one (downsample 2x with linear filter).
+  // All mips stay in eGeneral layout — barriers between iterations make each blit's
+  // write visible to the next iteration's read.
+  // First, make compute writes to mip 0 visible to the blit reads.
+  {
+    vk::ImageMemoryBarrier2 computeToBlit{
+      .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+      .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+      .oldLayout     = vk::ImageLayout::eGeneral,
+      .newLayout     = vk::ImageLayout::eGeneral,
+      .image         = clipmapAlbedoArray.get(),
+      .subresourceRange = vk::ImageSubresourceRange{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel   = 0,
+        .levelCount     = 1,
+        .baseArrayLayer = 0,
+        .layerCount     = CLIPMAP_LEVELS,
+      },
+    };
+    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers    = &computeToBlit,
+    });
+  }
+
+  int srcW = 256, srcH = 256;
+  for (uint32_t i = 1; i < CLIPMAP_ALBEDO_MIPS; ++i)
+  {
+    const int dstW = std::max(srcW / 2, 1);
+    const int dstH = std::max(srcH / 2, 1);
+
+    vk::ImageBlit blit{
+      .srcSubresource = vk::ImageSubresourceLayers{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .mipLevel       = i - 1,
+        .baseArrayLayer = 0,
+        .layerCount     = CLIPMAP_LEVELS,
+      },
+      .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{srcW, srcH, 1}},
+      .dstSubresource = vk::ImageSubresourceLayers{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .mipLevel       = i,
+        .baseArrayLayer = 0,
+        .layerCount     = CLIPMAP_LEVELS,
+      },
+      .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
+    };
+    cmd_buf.blitImage(
+      clipmapAlbedoArray.get(), vk::ImageLayout::eGeneral,
+      clipmapAlbedoArray.get(), vk::ImageLayout::eGeneral,
+      1, &blit, vk::Filter::eLinear);
+
+    // Make mip i's write visible to mip i+1's read on the next iteration.
+    if (i + 1 < CLIPMAP_ALBEDO_MIPS)
+    {
+      vk::ImageMemoryBarrier2 b{
+        .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .oldLayout     = vk::ImageLayout::eGeneral,
+        .newLayout     = vk::ImageLayout::eGeneral,
+        .image         = clipmapAlbedoArray.get(),
+        .subresourceRange = vk::ImageSubresourceRange{
+          .aspectMask     = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel   = i,
+          .levelCount     = 1,
+          .baseArrayLayer = 0,
+          .layerCount     = CLIPMAP_LEVELS,
+        },
+      };
+      cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers    = &b,
+      });
+    }
+
+    srcW = dstW;
+    srcH = dstH;
+  }
+
+  // All mips: eGeneral -> eShaderReadOnlyOptimal for fragment trilinear sampling.
+  {
+    vk::ImageMemoryBarrier2 toReadOnly{
+      .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+      .dstStageMask  = vk::PipelineStageFlagBits2::eFragmentShader,
+      .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+      .oldLayout     = vk::ImageLayout::eGeneral,
+      .newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal,
+      .image         = clipmapAlbedoArray.get(),
+      .subresourceRange = vk::ImageSubresourceRange{
+        .aspectMask     = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel   = 0,
+        .levelCount     = CLIPMAP_ALBEDO_MIPS,
+        .baseArrayLayer = 0,
+        .layerCount     = CLIPMAP_LEVELS,
+      },
+    };
+    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
+      .imageMemoryBarrierCount = 1,
+      .pImageMemoryBarriers    = &toReadOnly,
+    });
+  }
 }
 
 void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapTerrain);
 
-  const float heightScale = 200.0f;
+  const float heightScale = terrainHeightScale;
   const float halfGrid    = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
   const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
 

@@ -15,8 +15,8 @@ layout(push_constant) uniform PC
   vec4  sunDir;
   vec4  sunColor;
   vec4  eyeAndScale; // xyz=camera world pos, w=heightScale (negative = debug)
-  vec4  morphParams; // x=morphWidth (texels), y=showMorphAlpha, z=useMaterialClipmap
-  vec4  splatParams; // splatting params (used in fragment shader)
+  vec4  morphParams; // morphWidth, showMorphAlpha, useMaterialClipmap
+  vec4  splatParams; // used in fragment shader
 };
 
 const float HEIGHTMAP_SIZE = 256.0;
@@ -27,6 +27,8 @@ layout(location = 0) out vec3 wPos;
 layout(location = 1) out vec2 hmUV;
 layout(location = 2) flat out int instanceIdx;
 layout(location = 3) out float morphAlpha;
+layout(location = 4) out vec2 parentHmUV; // same world point in parent's heightmap
+layout(location = 5) out vec3 wNormal;    // heightmap-derived, blended with parent
 
 void main()
 {
@@ -56,20 +58,50 @@ void main()
   vec2 hmUVSelf = (gridMorphed + 0.5) / HEIGHTMAP_SIZE;
   float hSelf = texture(heightmapArray, vec3(hmUVSelf, layer)).r;
 
-  // Sample parent (coarser) level's height at the same world point
   float hParent = hSelf;
+  vec2  parentUV = hmUVSelf;     // safe fallback for the outermost level
+  float parentStep = step;        // safe fallback
+  int   parentIdx = gl_InstanceIndex; // safe fallback
   if (!isOutermost)
   {
-    int   parentIdx = gl_InstanceIndex - 1;
+    parentIdx = gl_InstanceIndex - 1;
     vec4  parentLD  = levels.data[parentIdx];
     vec2  parentOrigin = parentLD.xy;
-    float parentStep = parentLD.z;
+    parentStep = parentLD.z;
     vec2  parentGrid = (worldXZ - parentOrigin) / parentStep;
-    vec2  parentUV = (parentGrid + 0.5) / HEIGHTMAP_SIZE;
+    parentUV = (parentGrid + 0.5) / HEIGHTMAP_SIZE;
     hParent = texture(heightmapArray, vec3(parentUV, float(parentIdx))).r;
   }
+  parentHmUV = parentUV;
 
-  float h = mix(hSelf, hParent, alpha) * abs(eyeAndScale.w);
+  float hs = abs(eyeAndScale.w);
+  float h  = mix(hSelf, hParent, alpha) * hs;
+
+  const float TEX_STEP = 1.0 / HEIGHTMAP_SIZE;
+
+  float hL_s = texture(heightmapArray, vec3(hmUVSelf + vec2(-TEX_STEP, 0.0), layer)).r;
+  float hR_s = texture(heightmapArray, vec3(hmUVSelf + vec2( TEX_STEP, 0.0), layer)).r;
+  float hD_s = texture(heightmapArray, vec3(hmUVSelf + vec2(0.0, -TEX_STEP), layer)).r;
+  float hU_s = texture(heightmapArray, vec3(hmUVSelf + vec2(0.0,  TEX_STEP), layer)).r;
+  vec3 nSelf = normalize(vec3(
+    (hL_s - hR_s) * hs,
+    2.0 * step,
+    (hD_s - hU_s) * hs));
+
+  vec3 nParent = nSelf;
+  if (!isOutermost)
+  {
+    float hL_p = texture(heightmapArray, vec3(parentUV + vec2(-TEX_STEP, 0.0), float(parentIdx))).r;
+    float hR_p = texture(heightmapArray, vec3(parentUV + vec2( TEX_STEP, 0.0), float(parentIdx))).r;
+    float hD_p = texture(heightmapArray, vec3(parentUV + vec2(0.0, -TEX_STEP), float(parentIdx))).r;
+    float hU_p = texture(heightmapArray, vec3(parentUV + vec2(0.0,  TEX_STEP), float(parentIdx))).r;
+    nParent = normalize(vec3(
+      (hL_p - hR_p) * hs,
+      2.0 * parentStep,
+      (hD_p - hU_p) * hs));
+  }
+
+  wNormal = normalize(mix(nSelf, nParent, alpha));
 
   hmUV = hmUVSelf;
   wPos = vec3(worldXZ.x, h, worldXZ.y);

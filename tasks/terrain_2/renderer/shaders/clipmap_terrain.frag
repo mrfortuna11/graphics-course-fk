@@ -23,11 +23,12 @@ layout(location = 0) in vec3 wPos;
 layout(location = 1) in vec2 hmUV;
 layout(location = 2) flat in int instanceIdx;
 layout(location = 3) in float morphAlpha;
+layout(location = 4) in vec2 parentHmUV;
+layout(location = 5) in vec3 wNormal; // from vert: heightmap-derived, parent-blended
 
 const int NUM_LEVELS = 10;
 const float GRID_SIZE = 255.0; // n
 
-// Base material colors (linear-space, will be lit by sun + ambient)
 const vec3 COL_SAND  = vec3(0.78, 0.70, 0.50);
 const vec3 COL_GRASS = vec3(0.30, 0.45, 0.18);
 const vec3 COL_ROCK  = vec3(0.42, 0.38, 0.34);
@@ -69,10 +70,10 @@ float valueNoise(vec2 p)
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Procedural texture splatting: blend 4 base colors by height + slope
-//   p = world-space XZ for color variation
-//   h = world-space Y (height)
-//   slope = 1 - n.y, in [0..1] (0=flat, 1=vertical)
+// blend 4 base colors by height + slope
+// p = world-space XZ for color variation
+// h = world-space Y (height)
+// slope = 1 - n.y, in [0..1] (0=flat, 1=vertical)
 vec3 splatAlbedo(vec3 p, float h, float slope)
 {
   float heightLow  = splatParams.x;
@@ -116,10 +117,7 @@ void main()
       discard;
   }
 
-  // Geometric normal from screen-space derivatives of the interpolated world position
-  vec3 dPdx = dFdx(wPos);
-  vec3 dPdy = dFdy(wPos);
-  vec3 wNorm = normalize(cross(dPdx, dPdy));
+  vec3 wNorm = normalize(wNormal);
   if (wNorm.y < 0.0)
     wNorm = -wNorm;
 
@@ -127,12 +125,21 @@ void main()
   const vec3 L = normalize(sunDir.xyz);
   float NdotL  = max(dot(wNorm, L), 0.0);
 
-  // Albedo: either cached from material clipmap (1 texture sample) or computed live.
   bool useMaterialCache = morphParams.z > 0.5;
   float slope = 1.0 - clamp(wNorm.y, 0.0, 1.0);
-  vec3 splatColor = useMaterialCache
-    ? texture(albedoArray, vec3(hmUV, float(instanceIdx))).rgb
-    : splatAlbedo(wPos, wPos.y, slope);
+  vec3 splatColor;
+  if (useMaterialCache)
+  {
+    vec3 albedoSelf = texture(albedoArray, vec3(hmUV, float(instanceIdx))).rgb;
+    vec3 albedoParent = albedoSelf;
+    if (instanceIdx > 0)
+      albedoParent = texture(albedoArray, vec3(parentHmUV, float(instanceIdx - 1))).rgb;
+    splatColor = mix(albedoSelf, albedoParent, morphAlpha);
+  }
+  else
+  {
+    splatColor = splatAlbedo(wPos, wPos.y, slope);
+  }
 
   vec3 surfaceColor = debugLevels ? levelColor(instanceIdx) : splatColor;
 
