@@ -231,18 +231,18 @@ private:
 
   // Procedural texture splatting
   float terrainHeightLow      = 0.f;   // sand -> grass transition height (world units)
-  float terrainHeightHigh     = 60.f;  // grass -> snow transition height
-  float terrainBlendSharpness = 12.f;  // half-width of transition bands
+  float terrainHeightHigh     = 150.f;  // grass -> snow transition height
+  float terrainBlendSharpness = 40.f;  // half-width of transition bands
   float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above -> rock dominates
 
   // Material clipmap
   bool useMaterialClipmap = true;
 
   // Heightmap shape parameters (passed to clipmap_fill.comp).
-  float terrainHeightScale     = 200.f;  // overall vertical amplitude (world units)
-  float terrainHillsWeight     = 1.0f;   // perlin(p) at 256m: always-bumpy hills
-  float terrainRidgesWeight    = 1.2f;   // abs(perlin(p*0.125)) at 2048m: mountain ridges (positive-only uplift)
-  float terrainDetailAmplitude = 0.025f; // detail tile amplitude (~±5m at heightScale=200)
+  float terrainHeightScale     = 400.f;  // overall vertical amplitude (world units)
+  float terrainHillsWeight     = 0.7f;   // perlin(p) at 256m: always-bumpy hills
+  float terrainRidgesWeight    = 0.3f;   // abs(perlin(p*0.125)) at 2048m: mountain ridges (positive-only uplift)
+  float terrainDetailAmplitude = 0.018f; // detail tile amplitude (~±5m at heightScale=200)
 
   // xy=levelOrigin, z=gridStep
   etna::Buffer clipmapLevelsBuffer;
