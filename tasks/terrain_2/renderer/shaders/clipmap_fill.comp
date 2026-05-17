@@ -7,18 +7,39 @@ layout(binding = 1) uniform sampler2D detailTex;
 
 layout(push_constant) uniform PC
 {
-  vec2  levelOrigin;      // world XZ of texel (0,0)
-  float gridStep;         // world units per texel
+  // group 0
+  vec2  levelOrigin;
+  float gridStep;
   int   levelIdx;
-  float hillsWeight;      // weight of perlin(p) at 256m
-  float ridgesWeight;     // weight of abs(perlin(p*0.125)) at 2048m
-  float detailAmplitude;  // strength of detail tile contribution
+  // group 1: mixing weights
+  float hillsWeight;
+  float ridgesWeight;
+  float detailAmplitude;
+  float biasPower;
+  // group 2: shaping & mountain mask
+  float oceanCut;
+  float mountainMaskFreq;
+  float mountainMaskOffset;
+  float mountainMaskWidth;
+  // group 3: fBm config
+  float baseFreq;
+  int   octaves;
+  float persistence;
+  float lacunarity;
+  // group 4: domain warp & ridges
+  float warpAmp;
+  float warpFreq;
+  float ridgedSharpness;
+  float _pad;
 };
 
-const float DETAIL_WORLD_PERIOD = 256.0; // tile repeats every 256m
+const float DETAIL_WORLD_PERIOD = 256.0;
 const float DETAIL_TEX_SIZE     = 512.0;
 const float DETAIL_MAX_LOD      = 8.0;
 
+// -------------------------------------------------------
+// Perlin noise (same gradient-hash as before)
+// -------------------------------------------------------
 vec2 randomGradient(in ivec2 coord)
 {
   const uint w = 32u;
@@ -26,30 +47,96 @@ vec2 randomGradient(in ivec2 coord)
   uint a = uint(coord.x);
   uint b = uint(coord.y);
   a *= 3284157443u;
-  b ^= a << s | a >> w - s;
+  b ^= a << s | a >> (w - s);
   b *= 1911520717u;
-  a ^= b << s | b >> w - s;
+  a ^= b << s | b >> (w - s);
   a *= 2048419325u;
   float r = float(a) * (3.14159265 / float(~(~0u >> 1u)));
   return vec2(cos(r), sin(r));
 }
 
-float dotGridGradient(in vec2 pixCoord, in ivec2 gridCoord)
+float dotGridGradient(in vec2 p, in ivec2 cell)
 {
-  return dot(randomGradient(gridCoord), pixCoord - vec2(gridCoord));
+  return dot(randomGradient(cell), p - vec2(cell));
 }
 
 float perlin(in vec2 p)
 {
   int x0 = int(floor(p.x)), x1 = x0 + 1;
   int y0 = int(floor(p.y)), y1 = y0 + 1;
-  vec2 s = (3.0 - (p - vec2(x0, y0)) * 2.0) * (p - vec2(x0, y0)) * (p - vec2(x0, y0));
-  float n0 = dotGridGradient(p, ivec2(x0, y0));
-  float n1 = dotGridGradient(p, ivec2(x1, y0));
-  float ix0 = mix(n0, n1, s.x);
-  n0 = dotGridGradient(p, ivec2(x0, y1));
-  n1 = dotGridGradient(p, ivec2(x1, y1));
-  return mix(ix0, mix(n0, n1, s.x), s.y);
+  vec2 t  = p - vec2(x0, y0);
+  vec2 s  = (3.0 - t * 2.0) * t * t; // smoothstep
+  float n00 = dotGridGradient(p, ivec2(x0, y0));
+  float n10 = dotGridGradient(p, ivec2(x1, y0));
+  float n01 = dotGridGradient(p, ivec2(x0, y1));
+  float n11 = dotGridGradient(p, ivec2(x1, y1));
+  return mix(mix(n00, n10, s.x), mix(n01, n11, s.x), s.y);
+}
+
+// -------------------------------------------------------
+// Anti-aliasing: fade octave whose frequency exceeds
+// Nyquist of the current grid (0.5 texels per period).
+// -------------------------------------------------------
+float octaveFade(float freqPerMeter)
+{
+  float cyclesPerTexel = freqPerMeter * gridStep;
+  return 1.0 - smoothstep(0.30, 0.50, cyclesPerTexel);
+}
+
+// Per-octave world-space offsets — eliminates axis-aligned artifacts.
+// Two separate sets so fbm and ridgedFBM don't share the same phases.
+const vec2 FBM_OFF[8] = vec2[8](
+  vec2(  0.00,   0.00), vec2( 13.70,  27.30),
+  vec2( 53.90,   7.10), vec2( 91.30,  41.70),
+  vec2( 17.50,  83.90), vec2( 67.10,  11.30),
+  vec2( 43.70,  73.10), vec2( 29.90,  57.30));
+
+const vec2 RDG_OFF[8] = vec2[8](
+  vec2( 11.10,  37.70), vec2( 61.30,  19.50),
+  vec2( 83.70,  47.90), vec2( 29.30,  71.10),
+  vec2( 53.10,  13.70), vec2( 97.50,  31.90),
+  vec2( 23.90,  89.30), vec2( 41.70,  67.10));
+
+// -------------------------------------------------------
+// Classic fBm — symmetric bumps, mean ≈ 0
+// -------------------------------------------------------
+float fbm(vec2 worldXZ)
+{
+  float v = 0.0, amp = 1.0, totalAmp = 0.0;
+  float freq = baseFreq;
+  int N = clamp(octaves, 1, 8);
+  for (int i = 0; i < N; ++i)
+  {
+    float fade = octaveFade(freq);
+    v        += perlin(worldXZ * freq + FBM_OFF[i]) * amp * fade;
+    totalAmp += amp * fade;
+    freq *= lacunarity;
+    amp  *= persistence;
+  }
+  return totalAmp > 1e-4 ? v / totalAmp : 0.0;
+}
+
+// -------------------------------------------------------
+// Ridged multifractal — positive-uplift, sharp ridges
+// Output re-centred to ~[-1, 1] so it mixes uniformly.
+// -------------------------------------------------------
+float ridgedFBM(vec2 worldXZ)
+{
+  float v = 0.0, amp = 1.0, totalAmp = 0.0;
+  float freq  = baseFreq;
+  float sharp = max(ridgedSharpness, 1.0);
+  int N = clamp(octaves, 1, 8);
+  for (int i = 0; i < N; ++i)
+  {
+    float fade = octaveFade(freq);
+    float r    = 1.0 - abs(perlin(worldXZ * freq + RDG_OFF[i]));
+    r          = pow(r, sharp);           // sharpen ridge peaks
+    v        += (r * 2.0 - 1.0) * amp * fade; // recentre to [-1,1]
+    totalAmp += amp * fade;
+    freq *= lacunarity;
+    amp  *= persistence;
+  }
+  return totalAmp > 1e-4 ? v / totalAmp : 0.0;
 }
 
 void main()
@@ -60,15 +147,48 @@ void main()
 
   vec2 worldXZ = levelOrigin + vec2(c) * gridStep;
 
-  vec2 p = (worldXZ + 512.0) / 256.0;
-  float hills  = perlin(p);
-  float ridges = abs(perlin(p * 0.125));
-  float h = (hills * hillsWeight + ridges * ridgesWeight)
-          / max(hillsWeight + ridgesWeight, 0.01);
+  // -- Domain warp (tectonic feel) ----------------------
+  vec2 p = worldXZ;
+  if (warpAmp > 0.0)
+  {
+    vec2 q = vec2(
+      perlin(worldXZ * warpFreq),
+      perlin(worldXZ * warpFreq + vec2(7.13, 3.71)));
+    p += q * warpAmp;
+  }
 
+  // -- Base contributions --------------------------------
+  float hills  = fbm(p);          // ~[-1, 1], zero-mean
+  float ridges = ridgedFBM(p);    // ~[-1, 1], mostly positive peaks
+
+  // -- Mountain-mask: decides WHERE ridges appear -------
+  // Very-low-frequency perlin gates the ridged layer so
+  // some regions are flat plains and others are mountain ranges.
+  float mask        = perlin(p * mountainMaskFreq);   // ~[-1, 1]
+  float mountainness = smoothstep(
+    mountainMaskOffset - mountainMaskWidth,
+    mountainMaskOffset + mountainMaskWidth,
+    mask);
+
+  // -- Combine & normalise into [-1, 1] -----------------
+  float totalW = max(hillsWeight + ridgesWeight, 0.01);
+  float h = (hills  * hillsWeight
+           + ridges * ridgesWeight * mountainness) / totalW;
+
+  // -- Bias curve: remap to [0, 1] and push peaks up ----
+  h = h * 0.5 + 0.5;                                  // [-1,1] → [0,1]
+  h = pow(clamp(h, 0.0, 1.0), max(biasPower, 0.01));  // sharpen peaks
+
+  // -- Ocean cut: flatten everything below water level --
+  h = (h - oceanCut) / max(1.0 - oceanCut, 1e-3);
+  h = max(h, 0.0);
+
+  // -- Detail tile (fine grain, mip-selected per level) -
   float detailLod = clamp(
-    log2(gridStep * DETAIL_TEX_SIZE / DETAIL_WORLD_PERIOD), 0.0, DETAIL_MAX_LOD);
-  h += textureLod(detailTex, worldXZ / DETAIL_WORLD_PERIOD, detailLod).r * detailAmplitude;
+    log2(gridStep * DETAIL_TEX_SIZE / DETAIL_WORLD_PERIOD),
+    0.0, DETAIL_MAX_LOD);
+  h += textureLod(detailTex, worldXZ / DETAIL_WORLD_PERIOD, detailLod).r
+       * detailAmplitude;
 
   imageStore(heightmapArray, ivec3(c, levelIdx), vec4(h, 0.0, 0.0, 0.0));
 }

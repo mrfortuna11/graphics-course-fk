@@ -1498,21 +1498,50 @@ void WorldRenderer::drawGui()
 
       ImGui::Separator();
       ImGui::Text("Terrain shape");
-      ImGui::SliderFloat("Height scale (m)",     &terrainHeightScale,     10.f, 600.f, "%.0f");
-      ImGui::SliderFloat("Hills weight",         &terrainHillsWeight,      0.f,   3.f, "%.2f");
-      ImGui::SliderFloat("Ridges weight",        &terrainRidgesWeight,     0.f,   3.f, "%.2f");
-      ImGui::SliderFloat("Detail amplitude",     &terrainDetailAmplitude,  0.f,  0.1f, "%.3f");
-      ImGui::SameLine();
-      ImGui::TextDisabled("(?)");
-      if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-          "Height scale  : overall vertical size of the terrain.\n"
-          "Hills weight  : symmetric ±height noise (period ~256m).\n"
-          "                Higher -> more uniform bumps everywhere.\n"
-          "Ridges weight : positive-only uplift (period ~2048m).\n"
-          "                Higher -> more dramatic mountain ranges,\n"
-          "                shallower valleys.\n"
-          "Detail ampl.  : fine-grain bumps from the detail tile.");
+      ImGui::SliderFloat("Height scale (m)",    &terrainHeightScale,    10.f,  800.f, "%.0f");
+      ImGui::SliderFloat("Hills weight",        &terrainHillsWeight,     0.f,    3.f, "%.2f");
+      ImGui::SliderFloat("Ridges weight",       &terrainRidgesWeight,    0.f,    3.f, "%.2f");
+      ImGui::SliderFloat("Detail amplitude",    &terrainDetailAmplitude, 0.f,   0.1f, "%.3f");
+
+      ImGui::Separator();
+      ImGui::Text("fBm");
+      {
+        float period = terrainBaseFreq > 1e-7f ? 1.0f / terrainBaseFreq : 1024.f;
+        if (ImGui::SliderFloat("Base period (m)", &period, 64.f, 8192.f, "%.0f"))
+          terrainBaseFreq = 1.0f / period;
+      }
+      ImGui::SliderInt  ("Octaves",           &terrainOctaves,       1,    8);
+      ImGui::SliderFloat("Persistence",       &terrainPersistence,   0.1f, 1.0f, "%.2f");
+      ImGui::SliderFloat("Lacunarity",        &terrainLacunarity,    1.2f, 3.0f, "%.2f");
+
+      ImGui::Separator();
+      ImGui::Text("Shaping");
+      ImGui::SliderFloat("Bias power",        &terrainBiasPower,     0.2f, 4.0f, "%.2f");
+      ImGui::SliderFloat("Ocean cut",         &terrainOceanCut,      0.0f, 0.6f, "%.2f");
+
+      ImGui::Separator();
+      ImGui::Text("Mountain mask");
+      {
+        float maskPeriod = terrainMountainMaskFreq > 1e-7f
+          ? 1.0f / terrainMountainMaskFreq : 0.f;
+        if (ImGui::SliderFloat("Mask period (m)", &maskPeriod, 512.f, 16384.f, "%.0f"))
+          terrainMountainMaskFreq = maskPeriod > 0.f ? 1.0f / maskPeriod : terrainMountainMaskFreq;
+      }
+      ImGui::SliderFloat("Mask offset",       &terrainMountainMaskOffset, -1.0f, 1.0f, "%.2f");
+      ImGui::SliderFloat("Mask width",        &terrainMountainMaskWidth,   0.05f, 1.0f, "%.2f");
+
+      ImGui::Separator();
+      ImGui::Text("Domain warp");
+      ImGui::SliderFloat("Warp amplitude (m)", &terrainWarpAmp,      0.f,  400.f, "%.0f");
+      {
+        float warpPeriod = terrainWarpFreq > 1e-7f ? 1.0f / terrainWarpFreq : 0.f;
+        if (ImGui::SliderFloat("Warp period (m)", &warpPeriod, 64.f, 4096.f, "%.0f"))
+          terrainWarpFreq = warpPeriod > 0.f ? 1.0f / warpPeriod : terrainWarpFreq;
+      }
+
+      ImGui::Separator();
+      ImGui::Text("Ridged multifractal");
+      ImGui::SliderFloat("Ridge sharpness",   &terrainRidgedSharpness, 1.0f, 6.0f, "%.1f");
 
       ImGui::Separator();
       ImGui::Text("Splatting");
@@ -1757,12 +1786,25 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
 
   struct FillPC
   {
-    glm::vec2 levelOrigin;
+    glm::vec2 levelOrigin;       // group 0
     float     gridStep;
     int32_t   levelIdx;
-    float     hillsWeight;
+    float     hillsWeight;       // group 1
     float     ridgesWeight;
     float     detailAmplitude;
+    float     biasPower;
+    float     oceanCut;          // group 2
+    float     mountainMaskFreq;
+    float     mountainMaskOffset;
+    float     mountainMaskWidth;
+    float     baseFreq;          // group 3
+    int32_t   octaves;
+    float     persistence;
+    float     lacunarity;
+    float     warpAmp;           // group 4
+    float     warpFreq;
+    float     ridgedSharpness;
+    float     _pad{0.f};
   };
 
   auto fillInfo = etna::get_shader_program("clipmap_fill");
@@ -1800,6 +1842,18 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
       terrainHillsWeight,
       terrainRidgesWeight,
       terrainDetailAmplitude,
+      terrainBiasPower,
+      terrainOceanCut,
+      terrainMountainMaskFreq,
+      terrainMountainMaskOffset,
+      terrainMountainMaskWidth,
+      terrainBaseFreq,
+      terrainOctaves,
+      terrainPersistence,
+      terrainLacunarity,
+      terrainWarpAmp,
+      terrainWarpFreq,
+      terrainRidgedSharpness,
     };
     cmd_buf.pushConstants<FillPC>(
       clipmapFillPipeline.getVkPipelineLayout(),

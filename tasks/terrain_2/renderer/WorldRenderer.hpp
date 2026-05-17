@@ -239,10 +239,32 @@ private:
   bool useMaterialClipmap = true;
 
   // Heightmap shape parameters (passed to clipmap_fill.comp).
-  float terrainHeightScale     = 400.f;  // overall vertical amplitude (world units)
-  float terrainHillsWeight     = 0.7f;   // perlin(p) at 256m: always-bumpy hills
-  float terrainRidgesWeight    = 0.3f;   // abs(perlin(p*0.125)) at 2048m: mountain ridges (positive-only uplift)
-  float terrainDetailAmplitude = 0.018f; // detail tile amplitude (~±5m at heightScale=200)
+  float terrainHeightScale     = 400.f;
+  float terrainHillsWeight     = 1.0f;
+  float terrainRidgesWeight    = 0.7f;
+  float terrainDetailAmplitude = 0.018f;
+
+  // fBm parameters
+  float terrainBaseFreq     = 1.0f / 1024.0f; // cycles/m for octave 0 (~1km period)
+  int   terrainOctaves      = 6;
+  float terrainPersistence  = 0.5f;
+  float terrainLacunarity   = 2.0f;
+
+  // Shaping
+  float terrainBiasPower    = 1.6f;   // >1 pushes peaks up, flattens valleys
+  float terrainOceanCut     = 0.25f;  // fraction of [0,1] clamped to sea level
+
+  // Mountain-mask (low-freq gate for the ridged layer)
+  float terrainMountainMaskFreq   = 1.0f / 4096.0f; // cycles/m (~4km mask period)
+  float terrainMountainMaskOffset = 0.0f;            // smoothstep centre
+  float terrainMountainMaskWidth  = 0.35f;           // smoothstep half-width
+
+  // Domain warp
+  float terrainWarpAmp  = 80.0f;          // metres of position offset
+  float terrainWarpFreq = 1.0f / 512.0f;  // cycles/m for the warp noise
+
+  // Ridged multifractal
+  float terrainRidgedSharpness = 2.0f; // exponent applied to (1 - |perlin|)
 
   // xy=levelOrigin, z=gridStep
   etna::Buffer clipmapLevelsBuffer;
