@@ -214,6 +214,15 @@ private:
   bool detailTexInitialized = false;
   void initDetailTexture(vk::CommandBuffer cmd_buf);
 
+  static constexpr int DETAIL_LAYERS = 4;
+  etna::Image detailColorArray;
+  etna::Image detailHeightArray;
+  etna::Sampler detailSampler{};  // repeat + linear
+  void loadDetailTextures();
+
+  float detailTilePeriod    = 32.0f;  
+  float detailNormalStrength = 0.4f;  
+
   struct ClipmapPushConst
   {
     glm::mat4 mProjView;    // 64 bytes

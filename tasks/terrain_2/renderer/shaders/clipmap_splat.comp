@@ -5,6 +5,8 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0) uniform sampler2DArray heightmapArray;
 layout(binding = 1, rgba8) writeonly uniform image2DArray albedoArray;
+layout(binding = 2) uniform sampler2DArray detailColorArray;
+layout(binding = 3) uniform sampler2DArray detailHeightArray;
 
 layout(push_constant) uniform PC
 {
@@ -12,34 +14,14 @@ layout(push_constant) uniform PC
   float gridStep;
   int   levelIdx;
   float heightScale;
-  // 12B implicit padding (vec4 must align to 32)
+  float detailTilePeriod;
+  float _pad0;
+  float _pad1;
   vec4  splatParams;  // heightLow, heightHigh, blendSharp, slopeThreshold
 };
 
 const float HEIGHTMAP_SIZE = 256.0;
 const int   HEIGHTMAP_SIZE_I = 256;
-
-const vec3 COL_SAND  = vec3(0.78, 0.70, 0.50);
-const vec3 COL_GRASS = vec3(0.30, 0.45, 0.18);
-const vec3 COL_ROCK  = vec3(0.42, 0.38, 0.34);
-const vec3 COL_SNOW  = vec3(0.92, 0.94, 0.97);
-
-float hash21(vec2 p)
-{
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float valueNoise(vec2 p)
-{
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  float a = hash21(i + vec2(0.0, 0.0));
-  float b = hash21(i + vec2(1.0, 0.0));
-  float c = hash21(i + vec2(0.0, 1.0));
-  float d = hash21(i + vec2(1.0, 1.0));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
 
 float sampleH(ivec2 c)
 {
@@ -56,7 +38,6 @@ void main()
 
   vec2 worldXZ = levelOrigin + vec2(c) * gridStep;
 
-  // Heights at center + 4 neighbors for central-diff normal
   float hC = sampleH(c);
   float hL = sampleH(c + ivec2(-1,  0));
   float hR = sampleH(c + ivec2( 1,  0));
@@ -70,26 +51,46 @@ void main()
     (hD - hU) * heightScale));
   float slope = 1.0 - clamp(n.y, 0.0, 1.0);
 
-  // Mirror of splatAlbedo() in clipmap_terrain.frag
   float heightLow  = splatParams.x;
   float heightHigh = splatParams.y;
   float blendSharp = max(splatParams.z, 0.5);
   float slopeThr   = splatParams.w;
 
-  // Per-meter color variation so flat zones don't look like solid color
-  float n0 = valueNoise(worldXZ * 0.05);
-  float n1 = valueNoise(worldXZ * 0.5 + 17.3);
-  float variation = mix(0.85, 1.15, n0 * 0.6 + n1 * 0.4);
+  float wGround = 1.0 - smoothstep(heightLow - blendSharp, heightLow + blendSharp, worldY);
+  float wSnow   = smoothstep(heightHigh - blendSharp, heightHigh + blendSharp, worldY);
+  float wGrass  = clamp(1.0 - wGround - wSnow, 0.0, 1.0);
+  float wRock   = smoothstep(slopeThr - 0.15, slopeThr + 0.05, slope);
+  wGrass  *= (1.0 - wRock);
+  wGround *= (1.0 - wRock);
+  wSnow   *= (1.0 - wRock);
 
-  // Height-based weights, then rock dominates on slopes
-  float wSand  = 1.0 - smoothstep(heightLow  - blendSharp, heightLow  + blendSharp, worldY);
-  float wSnow  = smoothstep(heightHigh - blendSharp, heightHigh + blendSharp, worldY);
-  float wGrass = clamp(1.0 - wSand - wSnow, 0.0, 1.0);
-  float wRock  = smoothstep(slopeThr - 0.15, slopeThr + 0.05, slope);
-  wGrass *= (1.0 - wRock);
-  wSand  *= (1.0 - wRock);
-  wSnow  *= (1.0 - wRock);
+  // Height-based blending: combine smooth weight with per-pixel detail height
+  vec2 tileUV = worldXZ / max(detailTilePeriod, 1.0);
+  float dh0 = texture(detailHeightArray, vec3(tileUV, 0.0)).r;
+  float dh1 = texture(detailHeightArray, vec3(tileUV, 1.0)).r;
+  float dh2 = texture(detailHeightArray, vec3(tileUV, 2.0)).r;
+  float dh3 = texture(detailHeightArray, vec3(tileUV, 3.0)).r;
 
-  vec3 albedo = (COL_SAND*wSand + COL_GRASS*wGrass + COL_SNOW*wSnow + COL_ROCK*wRock) * variation;
+  const float HB_BIAS = 0.2;
+  float r0 = wGround + dh0;
+  float r1 = wGrass  + dh1;
+  float r2 = wRock   + dh2;
+  float r3 = wSnow   + dh3;
+  float rMax = max(max(r0, r1), max(r2, r3));
+  float hbBias = rMax - HB_BIAS;
+  r0 = max(r0 - hbBias, 0.0);
+  r1 = max(r1 - hbBias, 0.0);
+  r2 = max(r2 - hbBias, 0.0);
+  r3 = max(r3 - hbBias, 0.0);
+  float rTot = r0 + r1 + r2 + r3;
+  if (rTot < 1e-6) rTot = 1.0;
+  r0 /= rTot; r1 /= rTot; r2 /= rTot; r3 /= rTot;
+
+  vec3 c0 = texture(detailColorArray, vec3(tileUV, 0.0)).rgb;
+  vec3 c1 = texture(detailColorArray, vec3(tileUV, 1.0)).rgb;
+  vec3 c2 = texture(detailColorArray, vec3(tileUV, 2.0)).rgb;
+  vec3 c3 = texture(detailColorArray, vec3(tileUV, 3.0)).rgb;
+
+  vec3 albedo = c0*r0 + c1*r1 + c2*r2 + c3*r3;
   imageStore(albedoArray, ivec3(c, levelIdx), vec4(albedo, 1.0));
 }
