@@ -10,6 +10,8 @@
 #include <spdlog/spdlog.h>
 #include <glm/ext.hpp>
 
+#include <stb_image.h>
+
 #include <array>
 #include <cstddef>
 #include <string>
@@ -24,6 +26,10 @@ WorldRenderer::WorldRenderer()
       .filter = vk::Filter::eLinear,
       .addressMode = vk::SamplerAddressMode::eRepeat,
       .name = "clipmap_sampler"}}
+  , detailSampler{etna::Sampler::CreateInfo{
+      .filter = vk::Filter::eLinear,
+      .addressMode = vk::SamplerAddressMode::eRepeat,
+      .name = "detail_sampler"}}
 {
 }
 
@@ -243,6 +249,24 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     .name        = "clipmap_levels",
   });
   clipmapLevelsBuffer.map();
+
+  detailColorArray = ctx.createImage(etna::Image::CreateInfo{
+    .extent     = vk::Extent3D{1024, 1024, 1},
+    .name       = "detail_color_array",
+    .format     = vk::Format::eR8G8B8A8Srgb,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    .layers     = static_cast<std::size_t>(DETAIL_LAYERS),
+  });
+
+  detailHeightArray = ctx.createImage(etna::Image::CreateInfo{
+    .extent     = vk::Extent3D{1024, 1024, 1},
+    .name       = "detail_height_array",
+    .format     = vk::Format::eR8Unorm,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    .layers     = static_cast<std::size_t>(DETAIL_LAYERS),
+  });
+
+  loadDetailTextures();
 }
 
 void WorldRenderer::loadScene(std::filesystem::path path)
@@ -447,6 +471,61 @@ void WorldRenderer::uploadSceneTextures()
 
     bindlessTextureSet = etna::create_persistent_descriptor_set(
       layoutId, std::move(texBindings), /*allow_unbound_slots=*/true);
+  }
+}
+
+void WorldRenderer::loadDetailTextures()
+{
+  static const char* colorPaths[DETAIL_LAYERS] = {
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/ground079_color.png",
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/grass_color.png",
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/rock_color.png",
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/snow_color.png",
+  };
+  static const char* heightPaths[DETAIL_LAYERS] = {
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/ground079_height.png",
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/grass_height.png",
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/rock_height.png",
+    GRAPHICS_COURSE_RESOURCES_ROOT "/textures/detail/snow_height.png",
+  };
+
+  auto& ctx = etna::get_context();
+  auto oneShot = ctx.createOneShotCmdMgr();
+
+  for (int i = 0; i < DETAIL_LAYERS; ++i)
+  {
+    int w = 0, h = 0, c = 0;
+    stbi_uc* data = stbi_load(colorPaths[i], &w, &h, &c, 4);
+    if (!data)
+      spdlog::error("loadDetailTextures: failed to load '{}'", colorPaths[i]);
+    else
+    {
+      transferHelper->uploadImage(
+        *oneShot, detailColorArray,
+        0, static_cast<std::uint32_t>(i),
+        std::span<const std::byte>{
+          reinterpret_cast<const std::byte*>(data),
+          static_cast<std::size_t>(w * h * 4)});
+      stbi_image_free(data);
+    }
+  }
+
+  for (int i = 0; i < DETAIL_LAYERS; ++i)
+  {
+    int w = 0, h = 0, c = 0;
+    stbi_uc* data = stbi_load(heightPaths[i], &w, &h, &c, 1);
+    if (!data)
+      spdlog::error("loadDetailTextures: failed to load '{}'", heightPaths[i]);
+    else
+    {
+      transferHelper->uploadImage(
+        *oneShot, detailHeightArray,
+        0, static_cast<std::uint32_t>(i),
+        std::span<const std::byte>{
+          reinterpret_cast<const std::byte*>(data),
+          static_cast<std::size_t>(w * h * 1)});
+      stbi_image_free(data);
+    }
   }
 }
 
@@ -1554,10 +1633,15 @@ void WorldRenderer::drawGui()
           "     fragment shader does 1 texture sample.\n"
           "OFF: albedo computed live per fragment.");
 
-      ImGui::SliderFloat("Sand-Grass height",  &terrainHeightLow,      -50.f, 100.f, "%.1f");
+      ImGui::SliderFloat("Ground-Grass height", &terrainHeightLow,      -50.f, 100.f, "%.1f");
       ImGui::SliderFloat("Grass-Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
       ImGui::SliderFloat("Blend sharpness",    &terrainBlendSharpness,  0.5f, 40.f,  "%.1f");
-      ImGui::SliderFloat("Rock slope", &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
+      ImGui::SliderFloat("Rock slope",         &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
+
+      ImGui::Separator();
+      ImGui::Text("Detail textures");
+      ImGui::SliderFloat("Tile period (m)",  &detailTilePeriod,     2.f,  256.f, "%.0f");
+      ImGui::SliderFloat("Normal strength",  &detailNormalStrength, 0.f,    2.f, "%.2f");
     }
   }
 
@@ -1920,15 +2004,15 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
 
   struct SplatPC
   {
-    glm::vec2 levelOrigin;   
-    float     gridStep;      
-    int32_t   levelIdx;      
-    float     heightScale;   
-    uint32_t  _pad0;         
-    uint32_t  _pad1;         
-    uint32_t  _pad2;         
-    glm::vec4 splatParams;   
-  }; // sizeof = 48, matches GLSL block size
+    glm::vec2 levelOrigin;      // offset  0
+    float     gridStep;         // offset  8
+    int32_t   levelIdx;         // offset 12
+    float     heightScale;      // offset 16
+    float     detailTilePeriod; // offset 20
+    uint32_t  _pad0;            // offset 24
+    uint32_t  _pad1;            // offset 28
+    glm::vec4 splatParams;      // offset 32
+  }; // sizeof = 48
 
   auto info = etna::get_shader_program("clipmap_splat");
   auto bindH = clipmapHeightmapArray.genBinding(
@@ -1944,11 +2028,20 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       .levelCount = 1,
       .type       = vk::ImageViewType::e2DArray,
     });
+  auto bindDC = detailColorArray.genBinding(
+    detailSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  auto bindDH = detailHeightArray.genBinding(
+    detailSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, bindH}, etna::Binding{1, bindA}});
+    {etna::Binding{0, bindH}, etna::Binding{1, bindA},
+     etna::Binding{2, bindDC}, etna::Binding{3, bindDH}});
   vk::DescriptorSet vkSet = descSet.getVkSet();
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, clipmapSplatPipeline.getVkPipeline());
@@ -1972,7 +2065,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     const glm::vec2 origin = center - halfGrid * step;
 
     const int32_t instanceIdx = CLIPMAP_LEVELS - 1 - level;
-    const SplatPC pc{origin, step, instanceIdx, heightScale, 0, 0, 0, splatParams4};
+    const SplatPC pc{origin, step, instanceIdx, heightScale, detailTilePeriod, 0, 0, splatParams4};
 
     cmd_buf.pushConstants<SplatPC>(
       clipmapSplatPipeline.getVkPipelineLayout(),
@@ -1980,10 +2073,6 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     cmd_buf.dispatch(16, 16, 1);
   }
 
-  // Mip generation: blit each mip from the previous one (downsample 2x with linear filter).
-  // All mips stay in eGeneral layout — barriers between iterations make each blit's
-  // write visible to the next iteration's read.
-  // First, make compute writes to mip 0 visible to the blit reads.
   {
     vk::ImageMemoryBarrier2 computeToBlit{
       .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
@@ -2117,24 +2206,33 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  auto bind4 = detailColorArray.genBinding(
+    detailSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  auto bind5 = detailHeightArray.genBinding(
+    detailSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, bind0}, etna::Binding{2, bind2}, etna::Binding{3, bind3}});
+    {etna::Binding{0, bind0}, etna::Binding{2, bind2}, etna::Binding{3, bind3},
+     etna::Binding{4, bind4}, etna::Binding{5, bind5}});
   auto layout = clipmapTerrainPipeline.getVkPipelineLayout();
 
   const float scaleSigned = debugClipmapLevels ? -heightScale : heightScale;
   const ClipmapPushConst pc{
     worldViewProj,
-    glm::vec4(glm::normalize(sunDirection), 0.f),
+    glm::vec4(glm::normalize(sunDirection), detailNormalStrength),
     glm::vec4(sunColor, sunIntensity),
     glm::vec4(cameraWorldPos, scaleSigned),
     glm::vec4(
       clipmapMorphWidth,
       showMorphAlpha ? 1.0f : 0.0f,
       useMaterialClipmap ? 1.0f : 0.0f,
-      0.f),
+      detailTilePeriod),
     glm::vec4(
       terrainHeightLow,
       terrainHeightHigh,
