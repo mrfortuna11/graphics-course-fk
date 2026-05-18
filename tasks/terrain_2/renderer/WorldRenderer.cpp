@@ -14,6 +14,8 @@
 
 #include <array>
 #include <cstddef>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 WorldRenderer::WorldRenderer()
@@ -26,11 +28,28 @@ WorldRenderer::WorldRenderer()
       .filter = vk::Filter::eLinear,
       .addressMode = vk::SamplerAddressMode::eRepeat,
       .name = "clipmap_sampler"}}
-  , detailSampler{etna::Sampler::CreateInfo{
-      .filter = vk::Filter::eLinear,
-      .addressMode = vk::SamplerAddressMode::eRepeat,
-      .name = "detail_sampler"}}
 {
+  loadSettings("terrain_settings.txt");
+
+  auto& ctx   = etna::get_context();
+  auto device = ctx.getDevice();
+  const float maxAniso = std::min(
+    4.0f,
+    ctx.getPhysicalDevice().getProperties().limits.maxSamplerAnisotropy);
+  vk::SamplerCreateInfo si{
+    .magFilter        = vk::Filter::eLinear,
+    .minFilter        = vk::Filter::eLinear,
+    .mipmapMode       = vk::SamplerMipmapMode::eLinear,
+    .addressModeU     = vk::SamplerAddressMode::eRepeat,
+    .addressModeV     = vk::SamplerAddressMode::eRepeat,
+    .addressModeW     = vk::SamplerAddressMode::eRepeat,
+    .anisotropyEnable = vk::True,
+    .maxAnisotropy    = maxAniso,
+    .compareEnable    = vk::False,
+    .minLod           = 0.0f,
+    .maxLod           = VK_LOD_CLAMP_NONE,
+  };
+  detailSampler = device.createSamplerUnique(si).value;
 }
 
 void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
@@ -250,20 +269,27 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
   });
   clipmapLevelsBuffer.map();
 
+  static constexpr std::size_t DETAIL_TEX_MIPS = 11;
   detailColorArray = ctx.createImage(etna::Image::CreateInfo{
     .extent     = vk::Extent3D{1024, 1024, 1},
     .name       = "detail_color_array",
     .format     = vk::Format::eR8G8B8A8Srgb,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled
+                | vk::ImageUsageFlagBits::eTransferDst
+                | vk::ImageUsageFlagBits::eTransferSrc,
     .layers     = static_cast<std::size_t>(DETAIL_LAYERS),
+    .mipLevels  = DETAIL_TEX_MIPS,
   });
 
   detailHeightArray = ctx.createImage(etna::Image::CreateInfo{
     .extent     = vk::Extent3D{1024, 1024, 1},
     .name       = "detail_height_array",
     .format     = vk::Format::eR8Unorm,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    .imageUsage = vk::ImageUsageFlagBits::eSampled
+                | vk::ImageUsageFlagBits::eTransferDst
+                | vk::ImageUsageFlagBits::eTransferSrc,
     .layers     = static_cast<std::size_t>(DETAIL_LAYERS),
+    .mipLevels  = DETAIL_TEX_MIPS,
   });
 
   loadDetailTextures();
@@ -527,6 +553,233 @@ void WorldRenderer::loadDetailTextures()
       stbi_image_free(data);
     }
   }
+  const auto generateMips = [&](etna::Image& img) {
+    constexpr uint32_t MIPS   = 11;          // log2(1024)+1
+    constexpr uint32_t LAYERS = DETAIL_LAYERS;
+
+    auto cmdBuf = oneShot->start();
+    ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
+
+    auto barrierMip = [&](uint32_t baseMip, uint32_t levelCount,
+                          vk::ImageLayout oldL, vk::ImageLayout newL,
+                          vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
+                          vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA) {
+      vk::ImageMemoryBarrier2 b{
+        .srcStageMask  = srcS, .srcAccessMask = srcA,
+        .dstStageMask  = dstS, .dstAccessMask = dstA,
+        .oldLayout     = oldL, .newLayout     = newL,
+        .image         = img.get(),
+        .subresourceRange = vk::ImageSubresourceRange{
+          .aspectMask     = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel   = baseMip,
+          .levelCount     = levelCount,
+          .baseArrayLayer = 0,
+          .layerCount     = LAYERS,
+        },
+      };
+      cmdBuf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers    = &b,
+      });
+    };
+
+    barrierMip(0, 1,
+      vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
+      vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead,
+      vk::PipelineStageFlagBits2::eBlit,       vk::AccessFlagBits2::eTransferRead);
+
+    int srcW = 1024, srcH = 1024;
+    for (uint32_t m = 1; m < MIPS; ++m)
+    {
+      const int dstW = std::max(srcW / 2, 1);
+      const int dstH = std::max(srcH / 2, 1);
+
+      barrierMip(m, 1,
+        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+        vk::PipelineStageFlagBits2::eNone, vk::AccessFlagBits2::eNone,
+        vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite);
+
+      vk::ImageBlit blit{
+        .srcSubresource = vk::ImageSubresourceLayers{
+          .aspectMask     = vk::ImageAspectFlagBits::eColor,
+          .mipLevel       = m - 1,
+          .baseArrayLayer = 0,
+          .layerCount     = LAYERS,
+        },
+        .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{srcW, srcH, 1}},
+        .dstSubresource = vk::ImageSubresourceLayers{
+          .aspectMask     = vk::ImageAspectFlagBits::eColor,
+          .mipLevel       = m,
+          .baseArrayLayer = 0,
+          .layerCount     = LAYERS,
+        },
+        .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
+      };
+      cmdBuf.blitImage(
+        img.get(), vk::ImageLayout::eTransferSrcOptimal,
+        img.get(), vk::ImageLayout::eTransferDstOptimal,
+        1, &blit, vk::Filter::eLinear);
+
+      // Mip m: TransferDst -> TransferSrc (ready as source for next iteration)
+      barrierMip(m, 1,
+        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
+        vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
+
+      srcW = dstW;
+      srcH = dstH;
+    }
+
+    barrierMip(0, MIPS,
+      vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+      vk::PipelineStageFlagBits2::eBlit,        vk::AccessFlagBits2::eTransferRead,
+      vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead);
+
+    ETNA_CHECK_VK_RESULT(cmdBuf.end());
+    oneShot->submitAndWait(std::move(cmdBuf));
+  };
+
+  generateMips(detailColorArray);
+  generateMips(detailHeightArray);
+}
+
+void WorldRenderer::saveSettings(const std::filesystem::path& path) const
+{
+  std::ofstream f(path);
+  if (!f)
+  {
+    spdlog::warn("saveSettings: cannot open '{}'", path.string());
+    return;
+  }
+
+  f << "# terrain_2 settings\n";
+
+#define SAVE_SCALAR(field) f << #field << " " << (field) << "\n"
+#define SAVE_BOOL(field)   f << #field << " " << ((field) ? 1 : 0) << "\n"
+#define SAVE_VEC3(field)   f << #field << " " << (field).x << " " << (field).y << " " << (field).z << "\n"
+
+  // Terrain shape
+  SAVE_SCALAR(terrainHeightScale);
+  SAVE_SCALAR(terrainHillsWeight);
+  SAVE_SCALAR(terrainRidgesWeight);
+  SAVE_SCALAR(terrainDetailAmplitude);
+  SAVE_SCALAR(terrainBaseFreq);
+  SAVE_SCALAR(terrainOctaves);
+  SAVE_SCALAR(terrainPersistence);
+  SAVE_SCALAR(terrainLacunarity);
+  SAVE_SCALAR(terrainBiasPower);
+  SAVE_SCALAR(terrainOceanCut);
+  SAVE_SCALAR(terrainMountainMaskFreq);
+  SAVE_SCALAR(terrainMountainMaskOffset);
+  SAVE_SCALAR(terrainMountainMaskWidth);
+  SAVE_SCALAR(terrainWarpAmp);
+  SAVE_SCALAR(terrainWarpFreq);
+  SAVE_SCALAR(terrainRidgedSharpness);
+
+  // Splatting
+  SAVE_SCALAR(terrainHeightLow);
+  SAVE_SCALAR(terrainHeightHigh);
+  SAVE_SCALAR(terrainBlendSharpness);
+  SAVE_SCALAR(terrainSlopeThreshold);
+
+  // Detail textures
+  SAVE_SCALAR(detailTilePeriod);
+  SAVE_SCALAR(detailNormalStrength);
+
+  // Clipmap
+  SAVE_SCALAR(clipmapMorphWidth);
+  SAVE_SCALAR(liveLevelsCount);
+  SAVE_BOOL(debugClipmapLevels);
+  SAVE_BOOL(showMorphAlpha);
+  SAVE_BOOL(useClipmapTerrain);
+
+  // Sun / sky
+  SAVE_VEC3(sunDirection);
+  SAVE_VEC3(sunColor);
+  SAVE_SCALAR(sunIntensity);
+
+  // Tonemap / exposure
+  SAVE_SCALAR(tonemapMode);
+  SAVE_SCALAR(adaptationSpeed);
+  SAVE_SCALAR(keyValue);
+  SAVE_SCALAR(minExposure);
+  SAVE_SCALAR(maxExposure);
+
+  // Debug
+  SAVE_SCALAR(debugMode);
+
+#undef SAVE_SCALAR
+#undef SAVE_BOOL
+#undef SAVE_VEC3
+
+  spdlog::info("saveSettings: wrote '{}'", path.string());
+}
+
+void WorldRenderer::loadSettings(const std::filesystem::path& path)
+{
+  std::ifstream f(path);
+  if (!f)
+  {
+    spdlog::info("loadSettings: '{}' not found, using defaults", path.string());
+    return;
+  }
+
+  std::string line;
+  while (std::getline(f, line))
+  {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream iss(line);
+    std::string key;
+    if (!(iss >> key)) continue;
+
+#define LOAD_SCALAR(field) else if (key == #field) iss >> field
+#define LOAD_BOOL(field)   else if (key == #field) do { int _v = 0; iss >> _v; field = (_v != 0); } while (0)
+#define LOAD_VEC3(field)   else if (key == #field) iss >> field.x >> field.y >> field.z
+
+    if (false) {}
+    LOAD_SCALAR(terrainHeightScale);
+    LOAD_SCALAR(terrainHillsWeight);
+    LOAD_SCALAR(terrainRidgesWeight);
+    LOAD_SCALAR(terrainDetailAmplitude);
+    LOAD_SCALAR(terrainBaseFreq);
+    LOAD_SCALAR(terrainOctaves);
+    LOAD_SCALAR(terrainPersistence);
+    LOAD_SCALAR(terrainLacunarity);
+    LOAD_SCALAR(terrainBiasPower);
+    LOAD_SCALAR(terrainOceanCut);
+    LOAD_SCALAR(terrainMountainMaskFreq);
+    LOAD_SCALAR(terrainMountainMaskOffset);
+    LOAD_SCALAR(terrainMountainMaskWidth);
+    LOAD_SCALAR(terrainWarpAmp);
+    LOAD_SCALAR(terrainWarpFreq);
+    LOAD_SCALAR(terrainRidgedSharpness);
+    LOAD_SCALAR(terrainHeightLow);
+    LOAD_SCALAR(terrainHeightHigh);
+    LOAD_SCALAR(terrainBlendSharpness);
+    LOAD_SCALAR(terrainSlopeThreshold);
+    LOAD_SCALAR(detailTilePeriod);
+    LOAD_SCALAR(detailNormalStrength);
+    LOAD_SCALAR(clipmapMorphWidth);
+    LOAD_SCALAR(liveLevelsCount);
+    LOAD_BOOL(debugClipmapLevels);
+    LOAD_BOOL(showMorphAlpha);
+    LOAD_BOOL(useClipmapTerrain);
+    LOAD_VEC3(sunDirection);
+    LOAD_VEC3(sunColor);
+    LOAD_SCALAR(sunIntensity);
+    LOAD_SCALAR(tonemapMode);
+    LOAD_SCALAR(adaptationSpeed);
+    LOAD_SCALAR(keyValue);
+    LOAD_SCALAR(minExposure);
+    LOAD_SCALAR(maxExposure);
+    LOAD_SCALAR(debugMode);
+
+#undef LOAD_SCALAR
+#undef LOAD_BOOL
+#undef LOAD_VEC3
+  }
+
+  spdlog::info("loadSettings: loaded '{}'", path.string());
 }
 
 void WorldRenderer::loadShaders()
@@ -1129,7 +1382,7 @@ void WorldRenderer::renderWorld(
   if (selectedScene == SceneType::Terrain && useClipmapTerrain)
   {
     updateClipmapHeightmaps(cmd_buf);
-    if (useMaterialClipmap)
+    if (liveLevelsCount < CLIPMAP_LEVELS)
       updateClipmapAlbedos(cmd_buf);
   }
 
@@ -1540,6 +1793,18 @@ void WorldRenderer::drawGui()
 {
   ImGui::Begin("Simple render settings");
 
+  if (ImGui::Button("Save settings"))
+    saveSettings("terrain_settings.txt");
+  ImGui::SameLine();
+  if (ImGui::Button("Load settings"))
+    loadSettings("terrain_settings.txt");
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Reads/writes terrain_settings.txt in the working directory.\n"
+                      "The file is auto-loaded at startup if present.");
+  ImGui::Separator();
+
   if (ImGui::InputFloat("ImGui scale", &imguiScale, 0.1f, 0.5f, "%.1f"))
   {
     if (imguiScale < 0.5f)
@@ -1624,14 +1889,18 @@ void WorldRenderer::drawGui()
 
       ImGui::Separator();
       ImGui::Text("Splatting");
-      ImGui::Checkbox("Use material clipmap (cache)", &useMaterialClipmap);
+      ImGui::SliderInt("Live levels (close-up)", &liveLevelsCount, 0, CLIPMAP_LEVELS);
       ImGui::SameLine();
       ImGui::TextDisabled("(?)");
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-          "ON : albedo baked to per-level texture by compute,\n"
-          "     fragment shader does 1 texture sample.\n"
-          "OFF: albedo computed live per fragment.");
+          "Number of innermost clipmap levels that compute splatting per-fragment\n"
+          "from full-resolution detail textures (sharp close-up).\n"
+          "Remaining outer levels read from pre-baked 256x256 albedo cache (fast).\n"
+          "0   = all baked (fastest, blurry close-up)\n"
+          "%d  = all live  (slowest, sharpest)\n"
+          "3   = balanced (default): innermost 3 rings sharp, rest cached.",
+          CLIPMAP_LEVELS);
 
       ImGui::SliderFloat("Ground-Grass height", &terrainHeightLow,      -50.f, 100.f, "%.1f");
       ImGui::SliderFloat("Grass-Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
@@ -2057,7 +2326,8 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     terrainSlopeThreshold,
   };
 
-  for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
+  const int firstBakedLevel = std::clamp(liveLevelsCount, 0, CLIPMAP_LEVELS);
+  for (int level = CLIPMAP_LEVELS - 1; level >= firstBakedLevel; --level)
   {
     const float step = clipmapBaseStep * static_cast<float>(1 << level);
     const float snap = 2.f * step;
@@ -2231,7 +2501,7 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
     glm::vec4(
       clipmapMorphWidth,
       showMorphAlpha ? 1.0f : 0.0f,
-      useMaterialClipmap ? 1.0f : 0.0f,
+      static_cast<float>(liveLevelsCount),
       detailTilePeriod),
     glm::vec4(
       terrainHeightLow,

@@ -15,7 +15,7 @@ layout(push_constant) uniform PC
   vec4  sunDir;
   vec4  sunColor;
   vec4  eyeAndScale; // xyz=camera world pos, w=heightScale (negative = debug)
-  vec4  morphParams; // morphWidth, showMorphAlpha, useMaterialClipmap
+  vec4  morphParams; // morphWidth, showMorphAlpha, liveLevelsCount, detailTilePeriod
   vec4  splatParams; // used in fragment shader
 };
 
@@ -108,4 +108,7 @@ void main()
   instanceIdx = gl_InstanceIndex;
   morphAlpha = alpha;
   gl_Position = mProjView * vec4(wPos, 1.0);
+  const int NUM_LEVELS = 10;
+  float depthBias = float(NUM_LEVELS - 1 - gl_InstanceIndex) * 5e-5;
+  gl_Position.z += depthBias * gl_Position.w;
 }

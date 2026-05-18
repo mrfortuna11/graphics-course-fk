@@ -17,7 +17,7 @@ layout(push_constant) uniform PC
   vec4  sunDir;       // xyz=normalized sun direction, w=detailNormalStrength
   vec4  sunColor;     // rgb=color, a=intensity
   vec4  eyeAndScale;  // xyz=camera world pos, w=heightScale (negative = debug colors)
-  vec4  morphParams;  // x=morphWidth (texels), y=showMorphAlpha (0/1), z=useMaterialClipmap (0/1), w=detailTilePeriod
+  vec4  morphParams;  // x=morphWidth (texels), y=showMorphAlpha (0/1), z=liveLevelsCount, w=detailTilePeriod
   vec4  splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
 };
 
@@ -45,19 +45,20 @@ vec3 levelColor(int idx)
 
 void main()
 {
-  // Discard fragments covered by the next inner (finer) level
   if (instanceIdx < NUM_LEVELS - 1)
   {
     vec4  inner    = levels.data[instanceIdx + 1];
-    vec2  innerMin = inner.xy;
-    vec2  innerMax = inner.xy + (GRID_SIZE - 1.0) * inner.z;
-    if (wPos.x >= innerMin.x && wPos.x <= innerMax.x &&
-        wPos.z >= innerMin.y && wPos.z <= innerMax.y)
+    float overlap  = inner.z * 2.0;
+    vec2  innerMin = inner.xy + vec2(overlap);
+    vec2  innerMax = inner.xy + (GRID_SIZE - 1.0) * inner.z - vec2(overlap);
+    if (wPos.x >= innerMin.x && wPos.x < innerMax.x &&
+        wPos.z >= innerMin.y && wPos.z < innerMax.y)
       discard;
   }
 
   bool debugLevels      = eyeAndScale.w < 0.0;
-  bool useMaterialCache = morphParams.z > 0.5;
+  int  liveLevels       = int(morphParams.z + 0.5);
+  bool useMaterialCache = (instanceIdx < NUM_LEVELS - liveLevels);
   float tilePeriod      = max(morphParams.w, 1.0);
   float normalStrength  = sunDir.w;
 
@@ -122,7 +123,19 @@ void main()
     vec3 c1 = texture(detailColorArray, vec3(tileUV, 1.0)).rgb;
     vec3 c2 = texture(detailColorArray, vec3(tileUV, 2.0)).rgb;
     vec3 c3 = texture(detailColorArray, vec3(tileUV, 3.0)).rgb;
-    splatColor = c0*r0 + c1*r1 + c2*r2 + c3*r3;
+    vec3 liveColor = c0*r0 + c1*r1 + c2*r2 + c3*r3;
+
+    bool parentIsBaked = (instanceIdx > 0)
+                      && ((instanceIdx - 1) < NUM_LEVELS - liveLevels);
+    if (parentIsBaked)
+    {
+      vec3 parentBaked = texture(albedoArray, vec3(parentHmUV, float(instanceIdx - 1))).rgb;
+      splatColor = mix(liveColor, parentBaked, morphAlpha);
+    }
+    else
+    {
+      splatColor = liveColor;
+    }
 
     const float DET_STEP = 1.0 / 1024.0;
     float hL = 0.0, hR = 0.0, hD = 0.0, hU = 0.0;

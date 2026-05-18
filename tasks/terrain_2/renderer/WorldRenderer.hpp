@@ -49,6 +49,9 @@ public:
   void renderWorld(
     vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view);
 
+  void saveSettings(const std::filesystem::path& path) const;
+  void loadSettings(const std::filesystem::path& path);
+
 private:
   // Performs frustum culling and prepares instance data for rendering
   struct CulledRenderElements
@@ -205,8 +208,6 @@ private:
   etna::Image clipmapAlbedoArray;
   etna::ComputePipeline clipmapSplatPipeline{};
 
-  // Tileable detail noise (512x512 R32F + mips). Generated once at startup,
-  // sampled by clipmap_fill.comp with per-level LOD for seamless inter-level transitions.
   static constexpr uint32_t DETAIL_TEX_SIZE = 512;
   static constexpr uint32_t DETAIL_TEX_MIPS = 9; // log2(512) + 1
   etna::Image detailTex;
@@ -217,7 +218,7 @@ private:
   static constexpr int DETAIL_LAYERS = 4;
   etna::Image detailColorArray;
   etna::Image detailHeightArray;
-  etna::Sampler detailSampler{};  // repeat + linear
+  vk::UniqueSampler detailSampler{};
   void loadDetailTextures();
 
   float detailTilePeriod    = 32.0f;  
@@ -244,8 +245,7 @@ private:
   float terrainBlendSharpness = 40.f;  // half-width of transition bands
   float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above -> rock dominates
 
-  // Material clipmap
-  bool useMaterialClipmap = true;
+  int liveLevelsCount = 3;
 
   // Heightmap shape parameters (passed to clipmap_fill.comp).
   float terrainHeightScale     = 400.f;

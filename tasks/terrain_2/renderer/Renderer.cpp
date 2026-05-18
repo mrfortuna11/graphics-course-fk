@@ -51,6 +51,7 @@ void Renderer::initVulkan(std::span<const char*> instance_extensions)
             {
               .tessellationShader = vk::True,
               .multiDrawIndirect = vk::True,
+              .samplerAnisotropy = vk::True,
               .vertexPipelineStoresAndAtomics = vk::True,
             },
         },
