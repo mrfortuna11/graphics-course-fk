@@ -81,6 +81,29 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .name = "hdr_sampler",
     });
 
+  shadowMap = ctx.createImage(etna::Image::CreateInfo{
+    .extent     = vk::Extent3D{SHADOWMAP_DIM, SHADOWMAP_DIM, 1},
+    .name       = "shadow_map",
+    .format     = vk::Format::eD32Sfloat,
+    .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment
+                | vk::ImageUsageFlagBits::eSampled,
+  });
+
+  {
+    vk::SamplerCreateInfo si{
+      .magFilter    = vk::Filter::eLinear,
+      .minFilter    = vk::Filter::eLinear,
+      .mipmapMode   = vk::SamplerMipmapMode::eLinear,
+      .addressModeU = vk::SamplerAddressMode::eClampToBorder,
+      .addressModeV = vk::SamplerAddressMode::eClampToBorder,
+      .addressModeW = vk::SamplerAddressMode::eClampToBorder,
+      .minLod       = 0.f,
+      .maxLod       = VK_LOD_CLAMP_NONE,
+      .borderColor  = vk::BorderColor::eFloatOpaqueWhite
+    };
+    shadowSampler = ctx.getDevice().createSamplerUnique(si).value;
+  }
+
   transferHelper = std::make_unique<etna::BlockingTransferHelper>(
     etna::BlockingTransferHelper::CreateInfo{.stagingSize = 4u * 1024u * 1024u});
 

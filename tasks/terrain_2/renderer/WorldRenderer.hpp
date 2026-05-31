@@ -199,11 +199,10 @@ private:
   etna::GraphicsPipeline clipmapTerrainPipeline{};
   etna::Sampler clipmapSampler{}; // repeat wrap for tiling noise on outer levels
 
-  // Per-level 256x256 heightmap array (one layer per clipmap level, filled each frame)
   etna::Image clipmapHeightmapArray;
   etna::ComputePipeline clipmapFillPipeline{};
 
-  // Per-level RGBA8 albedo (with mip chain for trilinear minification).
+  // Per-level RGBA8 albedo (with mip chain for trilinear minification)
   static constexpr uint32_t CLIPMAP_ALBEDO_MIPS = 8; // 256, 128, 64, 32, 16, 8, 4, 2
   etna::Image clipmapAlbedoArray;
   etna::ComputePipeline clipmapSplatPipeline{};
@@ -247,33 +246,32 @@ private:
 
   int liveLevelsCount = 3;
 
-  // Heightmap shape parameters (passed to clipmap_fill.comp).
   float terrainHeightScale     = 400.f;
   float terrainHillsWeight     = 1.0f;
   float terrainRidgesWeight    = 0.7f;
   float terrainDetailAmplitude = 0.018f;
 
   // fBm parameters
-  float terrainBaseFreq     = 1.0f / 1024.0f; // cycles/m for octave 0 (~1km period)
+  float terrainBaseFreq     = 1.0f / 1024.0f; 
   int   terrainOctaves      = 6;
   float terrainPersistence  = 0.5f;
   float terrainLacunarity   = 2.0f;
 
   // Shaping
-  float terrainBiasPower    = 1.6f;   // >1 pushes peaks up, flattens valleys
-  float terrainOceanCut     = 0.25f;  // fraction of [0,1] clamped to sea level
+  float terrainBiasPower    = 1.6f;  
+  float terrainOceanCut     = 0.25f;  
 
-  // Mountain-mask (low-freq gate for the ridged layer)
-  float terrainMountainMaskFreq   = 1.0f / 4096.0f; // cycles/m (~4km mask period)
-  float terrainMountainMaskOffset = 0.0f;            // smoothstep centre
-  float terrainMountainMaskWidth  = 0.35f;           // smoothstep half-width
+
+  float terrainMountainMaskFreq   = 1.0f / 4096.0f;
+  float terrainMountainMaskOffset = 0.0f;           
+  float terrainMountainMaskWidth  = 0.35f;           
 
   // Domain warp
-  float terrainWarpAmp  = 80.0f;          // metres of position offset
-  float terrainWarpFreq = 1.0f / 512.0f;  // cycles/m for the warp noise
+  float terrainWarpAmp  = 80.0f;          
+  float terrainWarpFreq = 1.0f / 512.0f;  
 
   // Ridged multifractal
-  float terrainRidgedSharpness = 2.0f; // exponent applied to (1 - |perlin|)
+  float terrainRidgedSharpness = 2.0f;
 
   // xy=levelOrigin, z=gridStep
   etna::Buffer clipmapLevelsBuffer;
@@ -289,6 +287,10 @@ private:
 
   // 0=Shaded, 1=BaseColor, 2=Normal, 3=MetalRough, 4=Occlusion
   int debugMode = 0;
+
+  static constexpr uint32_t SHADOWMAP_DIM = 2048;
+  etna::Image       shadowMap;
+  vk::UniqueSampler shadowSampler; 
 
   glm::uvec2 resolution;
 };

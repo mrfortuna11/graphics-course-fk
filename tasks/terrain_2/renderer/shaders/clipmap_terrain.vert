@@ -32,9 +32,9 @@ layout(location = 5) out vec3 wNormal;    // heightmap-derived, blended with par
 
 void main()
 {
-  vec4  ld     = levels.data[gl_InstanceIndex];
+  vec4  ld = levels.data[gl_InstanceIndex];
   vec2  origin = ld.xy;
-  float step   = ld.z;
+  float step = ld.z;
   float layer = float(gl_InstanceIndex);
 
   // LOD morph
