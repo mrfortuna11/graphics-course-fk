@@ -32,6 +32,8 @@ target_add_shaders(bindless_and_pbr_renderer
   shaders/terrain.frag
   shaders/clipmap_terrain.vert
   shaders/clipmap_terrain.frag
+  shaders/clipmap_terrain_depth.vert
+  shaders/clipmap_terrain_depth.frag
   shaders/clipmap_fill.comp
   shaders/clipmap_splat.comp
   shaders/detail_gen.comp

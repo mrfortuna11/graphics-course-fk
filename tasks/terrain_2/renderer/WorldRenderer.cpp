@@ -844,6 +844,10 @@ void WorldRenderer::loadShaders()
     {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain.vert.spv",
      BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain.frag.spv"});
   etna::create_program(
+    "clipmap_terrain_depth",
+    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain_depth.vert.spv",
+     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain_depth.frag.spv"});
+  etna::create_program(
     "clipmap_fill", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_fill.comp.spv"});
   etna::create_program(
     "clipmap_splat", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_splat.comp.spv"});
@@ -938,6 +942,51 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
         },
     });
 
+  // Depth-only pipeline для shadow pass'а. Vertex input идентичен color path,
+  // но: нет color attachments, включён pipeline-level depth bias (борьба с
+  // shadow acne на наклонных поверхностях). blendingConfig.attachments = {}
+  // нужно явно — иначе etna выставит 1 attachment по умолчанию, что не
+  // совпадёт с пустым colorAttachmentFormats.
+  terrainDepthPipeline = pipelineManager.createGraphicsPipeline(
+    "clipmap_terrain_depth",
+    etna::GraphicsPipeline::CreateInfo{
+      .vertexShaderInput =
+        etna::VertexShaderInputDescription{
+          .bindings = {etna::VertexShaderInputDescription::Binding{
+            .byteStreamDescription =
+              etna::VertexByteStreamFormatDescription{
+                .stride     = sizeof(glm::vec2),
+                .attributes = {etna::VertexByteStreamFormatDescription::Attribute{
+                  .format = vk::Format::eR32G32Sfloat,
+                  .offset = 0,
+                }},
+              },
+          }},
+        },
+      .rasterizationConfig =
+        vk::PipelineRasterizationStateCreateInfo{
+          .polygonMode = vk::PolygonMode::eFill,
+          .cullMode = vk::CullModeFlagBits::eBack,
+          .frontFace = vk::FrontFace::eCounterClockwise,
+          .depthBiasEnable = vk::True,
+          .depthBiasConstantFactor = 1.25f,
+          .depthBiasSlopeFactor = 1.75f,
+          .lineWidth = 1.f,
+        },
+      .blendingConfig =
+        {
+          .attachments = {},
+          .logicOpEnable  = false,
+          .logicOp = vk::LogicOp::eClear,
+          .blendConstants = {0.f, 0.f, 0.f, 0.f},
+        },
+      .fragmentShaderOutput =
+        {
+          .colorAttachmentFormats = {},
+          .depthAttachmentFormat  = vk::Format::eD32Sfloat,
+        },
+    });
+
   terrainPipeline = pipelineManager.createGraphicsPipeline(
     "terrain_render",
     etna::GraphicsPipeline::CreateInfo{
@@ -994,6 +1043,32 @@ void WorldRenderer::update(const FramePacket& packet)
     const float aspect = float(resolution.x) / float(resolution.y);
     worldViewProj = packet.mainCam.projTm(aspect) * packet.mainCam.viewTm();
     cameraWorldPos = packet.mainCam.position;
+  }
+
+  {
+    const glm::vec3 lightDir = glm::normalize(sunDirection);
+
+    const glm::vec3 target = glm::vec3(cameraWorldPos.x, 0.f, cameraWorldPos.z);
+
+    const float boxHalf  = shadowOrthoHalfSize;
+    const float boxDepth = std::max(2000.f, terrainHeightScale * 5.f);
+
+    const glm::vec3 lightEye = target + lightDir * (boxDepth * 0.5f);
+    const glm::mat4 lightView = glm::lookAtLH(lightEye, target, glm::vec3(0, 1, 0));
+    const glm::mat4 lightProj = glm::orthoLH_ZO(
+      -boxHalf, +boxHalf, -boxHalf, +boxHalf, 0.f, boxDepth);
+
+    lightViewProj = lightProj * lightView;
+
+    const glm::vec4 worldOriginClip = lightViewProj * glm::vec4(0, 0, 0, 1);
+    const glm::vec2 shadowTexels    = glm::vec2(worldOriginClip)
+                                    * (float(SHADOWMAP_DIM) * 0.5f);
+    const glm::vec2 rounded         = glm::round(shadowTexels);
+    const glm::vec2 fracOffset      = (rounded - shadowTexels)
+                                    * (2.f / float(SHADOWMAP_DIM));
+
+    lightViewProj[3][0] += fracOffset.x;
+    lightViewProj[3][1] += fracOffset.y;
   }
 
   if (previousTime <= 0.f)
@@ -1401,12 +1476,25 @@ void WorldRenderer::renderWorld(
     }
   }
 
-  // Fill per-level heightmap textures before entering the render pass
   if (selectedScene == SceneType::Terrain && useClipmapTerrain)
   {
+    updateClipmapLevels();              
     updateClipmapHeightmaps(cmd_buf);
     if (liveLevelsCount < CLIPMAP_LEVELS)
       updateClipmapAlbedos(cmd_buf);
+
+    if (enableShadows)
+    {
+      renderShadowPass(cmd_buf);
+      etna::set_state(
+        cmd_buf,
+        shadowMap.get(),
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::AccessFlagBits2::eShaderSampledRead,
+        vk::ImageLayout::eDepthReadOnlyOptimal,
+        vk::ImageAspectFlagBits::eDepth);
+      etna::flush_barriers(cmd_buf);
+    }
   }
 
   // Render the world into the HDR offscreen target
@@ -1988,8 +2076,6 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
 
   ETNA_PROFILE_GPU(cmd_buf, clipmapDetailGen);
 
-  // mip 0: undefined -> eGeneral for compute write
-  // (subsequent mips will be transitioned within the blit chain).
   {
     vk::ImageMemoryBarrier2 toGeneral{
       .srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands,
@@ -2013,7 +2099,6 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
     });
   }
 
-  // Run detail_gen on mip 0 (single 2D image bind, mip 0 only for storage write).
   {
     auto info = etna::get_shader_program("detail_gen");
     auto bind = detailTex.genBinding(
@@ -2033,8 +2118,6 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
     cmd_buf.dispatch(DETAIL_TEX_SIZE / 16, DETAIL_TEX_SIZE / 16, 1);
   }
 
-  // Generate mip chain via linear blits (mip 0 -> 1 -> 2 -> ...).
-  // mip 0: compute write -> blit read
   {
     vk::ImageMemoryBarrier2 b{
       .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
@@ -2114,7 +2197,6 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
     srcH = dstH;
   }
 
-  // Final: all mips -> eShaderReadOnlyOptimal for use in clipmap_fill compute (and beyond).
   {
     vk::ImageMemoryBarrier2 toReadOnly{
       .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
@@ -2124,7 +2206,8 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
       .oldLayout     = vk::ImageLayout::eGeneral,
       .newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal,
       .image         = detailTex.get(),
-      .subresourceRange = vk::ImageSubresourceRange{
+      .subresourceRange = vk::ImageSubresourceRange
+      {
         .aspectMask     = vk::ImageAspectFlagBits::eColor,
         .baseMipLevel   = 0,
         .levelCount     = DETAIL_TEX_MIPS,
@@ -2145,7 +2228,6 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapFill);
 
-  // Lazily generate the detail tile once on first use.
   initDetailTexture(cmd_buf);
 
   const float halfGrid = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
@@ -2188,7 +2270,6 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
     clipmapSampler.get(),
     vk::ImageLayout::eGeneral,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
-  // Detail tile: REPEAT-wrapped sampler for tiling.
   auto detailBind = detailTex.genBinding(
     clipmapSampler.get(), // eRepeat addressMode for tile wrapping
     vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -2235,11 +2316,9 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
       clipmapFillPipeline.getVkPipelineLayout(),
       vk::ShaderStageFlagBits::eCompute, 0, {pc});
 
-    // 256x256 texels, 16x16 threadgroup = 16x16 groups
     cmd_buf.dispatch(16, 16, 1);
   }
 
-  // Transition to shader-read for the vertex shader
   etna::set_state(
     cmd_buf,
     clipmapHeightmapArray.get(),
@@ -2267,10 +2346,6 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     vk::ImageAspectFlagBits::eColor);
 
   etna::flush_barriers(cmd_buf);
-
-  // Albedo: raw barriers, since etna's set_state can't track per-mip layouts
-  // and we need different layouts for src/dst during mip blit chain.
-  // Old layout = eUndefined: we re-bake every frame, so previous data is discarded.
   {
     vk::ImageMemoryBarrier2 toGeneral{
       .srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands,
@@ -2296,15 +2371,15 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
 
   struct SplatPC
   {
-    glm::vec2 levelOrigin;      // offset  0
-    float     gridStep;         // offset  8
-    int32_t   levelIdx;         // offset 12
-    float     heightScale;      // offset 16
-    float     detailTilePeriod; // offset 20
-    uint32_t  _pad0;            // offset 24
-    uint32_t  _pad1;            // offset 28
-    glm::vec4 splatParams;      // offset 32
-  }; // sizeof = 48
+    glm::vec2 levelOrigin;      
+    float     gridStep;         
+    int32_t   levelIdx;         
+    float     heightScale;      
+    float     detailTilePeriod;
+    uint32_t  _pad0;            
+    uint32_t  _pad1;            
+    glm::vec4 splatParams;     
+  }; // 48
 
   auto info = etna::get_shader_program("clipmap_splat");
   auto bindH = clipmapHeightmapArray.genBinding(
@@ -2375,7 +2450,8 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       .oldLayout     = vk::ImageLayout::eGeneral,
       .newLayout     = vk::ImageLayout::eGeneral,
       .image         = clipmapAlbedoArray.get(),
-      .subresourceRange = vk::ImageSubresourceRange{
+      .subresourceRange = vk::ImageSubresourceRange
+      {
         .aspectMask     = vk::ImageAspectFlagBits::eColor,
         .baseMipLevel   = 0,
         .levelCount     = 1,
@@ -2416,7 +2492,6 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       clipmapAlbedoArray.get(), vk::ImageLayout::eGeneral,
       1, &blit, vk::Filter::eLinear);
 
-    // Make mip i's write visible to mip i+1's read on the next iteration.
     if (i + 1 < CLIPMAP_ALBEDO_MIPS)
     {
       vk::ImageMemoryBarrier2 b{
@@ -2470,24 +2545,76 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
   }
 }
 
+void WorldRenderer::updateClipmapLevels()
+{
+  const float halfGrid = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
+  const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
+  auto* levelData = reinterpret_cast<glm::vec4*>(clipmapLevelsBuffer.data());
+  for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
+  {
+    const float     step   = clipmapBaseStep * static_cast<float>(1 << level);
+    const float     snap   = 2.f * step;
+    const glm::vec2 center = glm::floor(camXZ / snap) * snap;
+    const glm::vec2 origin = center - halfGrid * step;
+    levelData[CLIPMAP_LEVELS - 1 - level] = glm::vec4(origin, step, 0.f);
+  }
+}
+
+void WorldRenderer::renderShadowPass(vk::CommandBuffer cmd_buf)
+{
+  ETNA_PROFILE_GPU(cmd_buf, shadowMapPass);
+
+  auto info  = etna::get_shader_program("clipmap_terrain_depth");
+  auto bind0 = clipmapHeightmapArray.genBinding(
+    perlinSampler.get(),
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  auto bind2 = clipmapLevelsBuffer.genBinding();
+
+  auto descSet = etna::create_descriptor_set(
+    info.getDescriptorLayoutId(0),
+    cmd_buf,
+    {etna::Binding{0, bind0}, etna::Binding{2, bind2}});
+
+  etna::RenderTargetState rt(
+    cmd_buf,
+    {{0, 0}, {SHADOWMAP_DIM, SHADOWMAP_DIM}},
+    {},  
+    {.image = shadowMap.get(), .view = shadowMap.getView({})});
+
+  auto layout = terrainDepthPipeline.getVkPipelineLayout();
+  cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, terrainDepthPipeline.getVkPipeline());
+  vk::DescriptorSet vkSet = descSet.getVkSet();
+  cmd_buf.bindDescriptorSets(
+    vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+  cmd_buf.bindVertexBuffers(0, {clipmapMesh->vertexBuffer()}, {vk::DeviceSize{0}});
+  cmd_buf.bindIndexBuffer(clipmapMesh->indexBuffer(), 0, vk::IndexType::eUint32);
+
+  struct DepthPC
+  {
+    glm::mat4 lightViewProj;
+    glm::vec4 eyeAndScale; // .w (heightScale)
+    glm::vec4 morphParams; // .x (morphWidth)
+  };
+  const DepthPC pc{
+    lightViewProj,
+    glm::vec4(cameraWorldPos, terrainHeightScale),
+    glm::vec4(clipmapMorphWidth, 0.f, 0.f, 0.f),
+  };
+  cmd_buf.pushConstants<DepthPC>(layout, vk::ShaderStageFlagBits::eVertex, 0, {pc});
+
+  constexpr uint32_t SHADOW_FIRST_INSTANCE = 4;
+  constexpr uint32_t SHADOW_INSTANCE_COUNT = CLIPMAP_LEVELS - SHADOW_FIRST_INSTANCE;
+  cmd_buf.drawIndexed(
+    clipmapFootprint.indexCount, SHADOW_INSTANCE_COUNT,
+    clipmapFootprint.firstIndex, clipmapFootprint.vertexOffset, SHADOW_FIRST_INSTANCE);
+}
+
 void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, clipmapTerrain);
 
   const float heightScale = terrainHeightScale;
-  const float halfGrid    = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
-  const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
-
-  // Write per-level data to mapped SSBO: instance 0 = outermost, last = innermost
-  auto* levelData = reinterpret_cast<glm::vec4*>(clipmapLevelsBuffer.data());
-  for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
-  {
-    const float step   = clipmapBaseStep * static_cast<float>(1 << level);
-    const float snap   = 2.f * step;
-    const glm::vec2 center = glm::floor(camXZ / snap) * snap;
-    const glm::vec2 origin = center - halfGrid * step;
-    levelData[CLIPMAP_LEVELS - 1 - level] = glm::vec4(origin, step, 0.f);
-  }
 
   auto info  = etna::get_shader_program("clipmap_terrain");
   auto bind0 = clipmapHeightmapArray.genBinding(
@@ -2507,12 +2634,15 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
     detailSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
+  auto bind6 = shadowMap.genBinding(
+    shadowSampler.get(),
+    vk::ImageLayout::eDepthReadOnlyOptimal);
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
     {etna::Binding{0, bind0}, etna::Binding{2, bind2}, etna::Binding{3, bind3},
-     etna::Binding{4, bind4}, etna::Binding{5, bind5}});
+     etna::Binding{4, bind4}, etna::Binding{5, bind5}, etna::Binding{6, bind6}});
   auto layout = clipmapTerrainPipeline.getVkPipelineLayout();
 
   const float scaleSigned = debugClipmapLevels ? -heightScale : heightScale;
@@ -2531,6 +2661,8 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
       terrainHeightHigh,
       terrainBlendSharpness,
       terrainSlopeThreshold),
+    lightViewProj,
+    glm::vec4(enableShadows ? 1.f : 0.f, 0.f, 0.f, 0.f),
   };
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, clipmapTerrainPipeline.getVkPipeline());

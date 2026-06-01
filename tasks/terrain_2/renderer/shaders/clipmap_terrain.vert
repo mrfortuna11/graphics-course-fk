@@ -20,6 +20,8 @@ layout(push_constant) uniform PC
   vec4  eyeAndScale; // xyz=camera world pos, w=heightScale (negative = debug)
   vec4  morphParams; // morphWidth, showMorphAlpha, liveLevelsCount, detailTilePeriod
   vec4  splatParams; // used in fragment shader
+  mat4  lightViewProj; 
+  vec4  shadowParams;  
 };
 
 layout(location = 0) out vec3 wPos;

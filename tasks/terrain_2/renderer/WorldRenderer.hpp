@@ -225,13 +225,15 @@ private:
 
   struct ClipmapPushConst
   {
-    glm::mat4 mProjView;    // 64 bytes
-    glm::vec4 sunDir;       // xyz=normalized sun direction
-    glm::vec4 sunColor;     // rgb=color, a=intensity
-    glm::vec4 eyeAndScale;  // xyz=camera world pos, w=heightScale
-    glm::vec4 morphParams;  // x=morphWidth (texels), y=showMorphAlpha (0/1)
-    glm::vec4 splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
-  }; // 144 bytes
+    glm::mat4 mProjView;     // 64 bytes
+    glm::vec4 sunDir;        // xyz=normalized sun direction
+    glm::vec4 sunColor;      // rgb=color, a=intensity
+    glm::vec4 eyeAndScale;   // xyz=camera world pos, w=heightScale
+    glm::vec4 morphParams;   // x=morphWidth (texels), y=showMorphAlpha (0/1)
+    glm::vec4 splatParams;   // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
+    glm::mat4 lightViewProj; 
+    glm::vec4 shadowParams;  
+  }; // 224 bytes
 
   bool useClipmapTerrain = true;
   bool debugClipmapLevels = false;
@@ -289,8 +291,15 @@ private:
   int debugMode = 0;
 
   static constexpr uint32_t SHADOWMAP_DIM = 2048;
-  etna::Image       shadowMap;
-  vk::UniqueSampler shadowSampler; 
+  etna::Image shadowMap;
+  vk::UniqueSampler shadowSampler;
+  etna::GraphicsPipeline terrainDepthPipeline{};
+  glm::mat4 lightViewProj{1.f};
+  float shadowOrthoHalfSize = 500.f;
+  bool enableShadows = true;
+
+  void updateClipmapLevels();
+  void renderShadowPass(vk::CommandBuffer cmd_buf);
 
   glm::uvec2 resolution;
 };

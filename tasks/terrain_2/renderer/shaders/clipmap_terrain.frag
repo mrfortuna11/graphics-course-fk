@@ -10,6 +10,7 @@ layout(binding = 2) readonly buffer LevelDataBlock {
 layout(binding = 3) uniform sampler2DArray albedoArray;
 layout(binding = 4) uniform sampler2DArray detailColorArray;
 layout(binding = 5) uniform sampler2DArray detailHeightArray;
+layout(binding = 6) uniform sampler2D shadowMap;
 
 layout(push_constant) uniform PC
 {
@@ -19,6 +20,8 @@ layout(push_constant) uniform PC
   vec4  eyeAndScale;  // xyz=camera world pos, w=heightScale (negative = debug colors)
   vec4  morphParams;  // x=morphWidth (texels), y=showMorphAlpha (0/1), z=liveLevelsCount, w=detailTilePeriod
   vec4  splatParams;  // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
+  mat4  lightViewProj; 
+  vec4  shadowParams;  
 };
 
 layout(location = 0) in vec3 wPos;
@@ -82,7 +85,7 @@ void main()
   wSnow   *= (1.0 - wRock);
 
   vec2 tileUV = wPos.xz / tilePeriod;
-  vec3 wNorm = macroN; // default: macro normal only (baked path)
+  vec3 wNorm = macroN; 
   vec3 splatColor;
 
   if (useMaterialCache)
@@ -96,13 +99,11 @@ void main()
   else
   {
 
-    // Sample detail heights at the tile UV for height-biased blending
     float dh0 = texture(detailHeightArray, vec3(tileUV, 0.0)).r;
     float dh1 = texture(detailHeightArray, vec3(tileUV, 1.0)).r;
     float dh2 = texture(detailHeightArray, vec3(tileUV, 2.0)).r;
     float dh3 = texture(detailHeightArray, vec3(tileUV, 3.0)).r;
 
-    // max+bias blending: sharp natural material boundaries
     const float HB_BIAS = 0.2;
     float r0 = wGround + dh0;
     float r1 = wGrass  + dh1;
@@ -162,6 +163,24 @@ void main()
   vec3 diffuse = surfaceColor / 3.14159265
     * sunColor.rgb * sunColor.a * NdotL;
 
+  float shadow = 1.0;
+  if (shadowParams.x > 0.5)
+  {
+    vec4 lp  = lightViewProj * vec4(wPos, 1.0);
+    vec3 ndc = lp.xyz / lp.w;
+    vec2 sUV = ndc.xy * 0.5 + 0.5;
+
+    if (all(greaterThanEqual(sUV, vec2(0.0))) &&
+        all(lessThanEqual(sUV, vec2(1.0))))
+    {
+      float NdotL_macro = max(dot(macroN, L), 0.0);
+      float bias = max(0.002 * (1.0 - NdotL_macro), 0.0005);
+
+      float sampleDepth = texture(shadowMap, sUV).r;
+      shadow = (ndc.z - bias > sampleDepth) ? 0.0 : 1.0;
+    }
+  }
+
   const vec3 SKY_ZENITH  = vec3(0.18, 0.32, 0.70);
   const vec3 SKY_HORIZON = vec3(0.78, 0.86, 0.95);
   const vec3 SKY_GROUND  = vec3(0.18, 0.16, 0.14);
@@ -169,7 +188,7 @@ void main()
     ? mix(SKY_HORIZON, SKY_ZENITH,  smoothstep(0.0, 0.55,  wNorm.y))
     : mix(SKY_HORIZON, SKY_GROUND,  smoothstep(0.0, 0.30, -wNorm.y));
 
-  vec3 finalColor = diffuse + skyAmbient * surfaceColor * 0.5;
+  vec3 finalColor = shadow * diffuse + skyAmbient * surfaceColor * 0.5;
 
   if (morphParams.y > 0.5)
     finalColor = mix(finalColor, vec3(0.05, 1.0, 0.05), morphAlpha);
