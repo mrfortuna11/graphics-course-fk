@@ -721,6 +721,10 @@ void WorldRenderer::saveSettings(const std::filesystem::path& path) const
   SAVE_VEC3(sunColor);
   SAVE_SCALAR(sunIntensity);
 
+  // Shadows 
+  SAVE_BOOL(enableShadows);
+  SAVE_SCALAR(shadowOrthoHalfSize);
+
   // Tonemap / exposure
   SAVE_SCALAR(tonemapMode);
   SAVE_SCALAR(adaptationSpeed);
@@ -790,6 +794,8 @@ void WorldRenderer::loadSettings(const std::filesystem::path& path)
     LOAD_VEC3(sunDirection);
     LOAD_VEC3(sunColor);
     LOAD_SCALAR(sunIntensity);
+    LOAD_BOOL(enableShadows);
+    LOAD_SCALAR(shadowOrthoHalfSize);
     LOAD_SCALAR(tonemapMode);
     LOAD_SCALAR(adaptationSpeed);
     LOAD_SCALAR(keyValue);
@@ -1030,6 +1036,10 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
           .depthAttachmentFormat = vk::Format::eD32Sfloat,
         },
     });
+  shadowDebugQuad = std::make_unique<QuadRenderer>(QuadRenderer::CreateInfo{
+    .format = swapchain_format,
+    .rect   = {{0, 0}, {256, 256}},
+  });
 }
 
 void WorldRenderer::debugInput(const Keyboard&) {}
@@ -1727,6 +1737,12 @@ void WorldRenderer::renderWorld(
 
     cmd_buf.draw(3, 1, 0, 0);
   }
+
+  if (drawShadowMapOverlay && shadowDebugQuad && enableShadows)
+  {
+    shadowDebugQuad->render(
+      cmd_buf, target_image, target_image_view, shadowMap, perlinSampler);
+  }
 }
 
 void WorldRenderer::initTerrainIfNeeded()
@@ -2028,6 +2044,12 @@ void WorldRenderer::drawGui()
   const char* debugModes[] = {
     "Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
   ImGui::Combo("Debug view", &debugMode, debugModes, IM_ARRAYSIZE(debugModes));
+
+  ImGui::Separator();
+  ImGui::Text("Shadows");
+  ImGui::Checkbox("Enable shadows", &enableShadows);
+  ImGui::SliderFloat("Ortho half size (m)", &shadowOrthoHalfSize, 200.f, 2000.f, "%.0f");
+  ImGui::Checkbox("Show shadow map overlay", &drawShadowMapOverlay);
 
   ImGui::Separator();
   ImGui::Text("Adaptive exposure");

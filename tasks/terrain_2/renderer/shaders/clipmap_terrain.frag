@@ -176,8 +176,16 @@ void main()
       float NdotL_macro = max(dot(macroN, L), 0.0);
       float bias = max(0.002 * (1.0 - NdotL_macro), 0.0005);
 
-      float sampleDepth = texture(shadowMap, sUV).r;
-      shadow = (ndc.z - bias > sampleDepth) ? 0.0 : 1.0;
+      vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
+      float sum = 0.0;
+      for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+          vec2 offset = vec2(dx, dy) * texelSize;
+          float d = texture(shadowMap, sUV + offset).r;
+          sum += (ndc.z - bias > d) ? 0.0 : 1.0;
+        }
+      shadow = sum / 9.0;
     }
   }
 

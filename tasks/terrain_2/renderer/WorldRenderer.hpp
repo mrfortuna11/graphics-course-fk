@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include "scene/SceneManager.hpp"
+#include "render_utils/QuadRenderer.hpp"
 #include "wsi/Keyboard.hpp"
 
 #include "FramePacket.hpp"
@@ -220,19 +221,19 @@ private:
   vk::UniqueSampler detailSampler{};
   void loadDetailTextures();
 
-  float detailTilePeriod    = 32.0f;  
-  float detailNormalStrength = 0.4f;  
+  float detailTilePeriod = 32.0f;
+  float detailNormalStrength = 0.4f;
 
   struct ClipmapPushConst
   {
-    glm::mat4 mProjView;     // 64 bytes
-    glm::vec4 sunDir;        // xyz=normalized sun direction
-    glm::vec4 sunColor;      // rgb=color, a=intensity
-    glm::vec4 eyeAndScale;   // xyz=camera world pos, w=heightScale
-    glm::vec4 morphParams;   // x=morphWidth (texels), y=showMorphAlpha (0/1)
-    glm::vec4 splatParams;   // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
-    glm::mat4 lightViewProj; 
-    glm::vec4 shadowParams;  
+    glm::mat4 mProjView;   // 64 bytes
+    glm::vec4 sunDir;      // xyz=normalized sun direction
+    glm::vec4 sunColor;    // rgb=color, a=intensity
+    glm::vec4 eyeAndScale; // xyz=camera world pos, w=heightScale
+    glm::vec4 morphParams; // x=morphWidth (texels), y=showMorphAlpha (0/1)
+    glm::vec4 splatParams; // x=heightLow, y=heightHigh, z=blendSharp, w=slopeThreshold
+    glm::mat4 lightViewProj;
+    glm::vec4 shadowParams;
   }; // 224 bytes
 
   bool useClipmapTerrain = true;
@@ -241,36 +242,36 @@ private:
   float clipmapMorphWidth = 12.0f; // texels at the outer edge of each ring
 
   // Procedural texture splatting
-  float terrainHeightLow      = 0.f;   // sand -> grass transition height (world units)
-  float terrainHeightHigh     = 150.f;  // grass -> snow transition height
-  float terrainBlendSharpness = 40.f;  // half-width of transition bands
-  float terrainSlopeThreshold = 0.7f;  // (1 - n.y); above -> rock dominates
+  float terrainHeightLow = 0.f;       // sand -> grass transition height (world units)
+  float terrainHeightHigh = 150.f;    // grass -> snow transition height
+  float terrainBlendSharpness = 40.f; // half-width of transition bands
+  float terrainSlopeThreshold = 0.7f; // (1 - n.y); above -> rock dominates
 
   int liveLevelsCount = 3;
 
-  float terrainHeightScale     = 400.f;
-  float terrainHillsWeight     = 1.0f;
-  float terrainRidgesWeight    = 0.7f;
+  float terrainHeightScale = 400.f;
+  float terrainHillsWeight = 1.0f;
+  float terrainRidgesWeight = 0.7f;
   float terrainDetailAmplitude = 0.018f;
 
   // fBm parameters
-  float terrainBaseFreq     = 1.0f / 1024.0f; 
-  int   terrainOctaves      = 6;
-  float terrainPersistence  = 0.5f;
-  float terrainLacunarity   = 2.0f;
+  float terrainBaseFreq = 1.0f / 1024.0f;
+  int terrainOctaves = 6;
+  float terrainPersistence = 0.5f;
+  float terrainLacunarity = 2.0f;
 
   // Shaping
-  float terrainBiasPower    = 1.6f;  
-  float terrainOceanCut     = 0.25f;  
+  float terrainBiasPower = 1.6f;
+  float terrainOceanCut = 0.25f;
 
 
-  float terrainMountainMaskFreq   = 1.0f / 4096.0f;
-  float terrainMountainMaskOffset = 0.0f;           
-  float terrainMountainMaskWidth  = 0.35f;           
+  float terrainMountainMaskFreq = 1.0f / 4096.0f;
+  float terrainMountainMaskOffset = 0.0f;
+  float terrainMountainMaskWidth = 0.35f;
 
   // Domain warp
-  float terrainWarpAmp  = 80.0f;          
-  float terrainWarpFreq = 1.0f / 512.0f;  
+  float terrainWarpAmp = 80.0f;
+  float terrainWarpFreq = 1.0f / 512.0f;
 
   // Ridged multifractal
   float terrainRidgedSharpness = 2.0f;
@@ -296,6 +297,8 @@ private:
   etna::GraphicsPipeline terrainDepthPipeline{};
   glm::mat4 lightViewProj{1.f};
   float shadowOrthoHalfSize = 500.f;
+  std::unique_ptr<QuadRenderer> shadowDebugQuad;
+  bool drawShadowMapOverlay = false;
   bool enableShadows = true;
 
   void updateClipmapLevels();
