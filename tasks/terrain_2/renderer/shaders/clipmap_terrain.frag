@@ -10,7 +10,7 @@ layout(binding = 2) readonly buffer LevelDataBlock {
 layout(binding = 3) uniform sampler2DArray albedoArray;
 layout(binding = 4) uniform sampler2DArray detailColorArray;
 layout(binding = 5) uniform sampler2DArray detailHeightArray;
-layout(binding = 6) uniform sampler2D shadowMap;
+layout(binding = 6) uniform sampler2DShadow shadowMap;
 
 layout(push_constant) uniform PC
 {
@@ -176,16 +176,7 @@ void main()
       float NdotL_macro = max(dot(macroN, L), 0.0);
       float bias = max(0.002 * (1.0 - NdotL_macro), 0.0005);
 
-      vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
-      float sum = 0.0;
-      for (int dx = -1; dx <= 1; ++dx)
-        for (int dy = -1; dy <= 1; ++dy)
-        {
-          vec2 offset = vec2(dx, dy) * texelSize;
-          float d = texture(shadowMap, sUV + offset).r;
-          sum += (ndc.z - bias > d) ? 0.0 : 1.0;
-        }
-      shadow = sum / 9.0;
+      shadow = texture(shadowMap, vec3(sUV, ndc.z - bias));
     }
   }
 

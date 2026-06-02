@@ -90,16 +90,22 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
   });
 
   {
+    // Hardware shadow comparison sampler: при выборке через sampler2DShadow
+    // GPU автоматически сравнивает refValue с каждым из 4 текстелей (linear
+    // filter) и билинейно интерполирует результаты → бесплатный 2×2 PCF
+    // с правильным sub-texel взвешиванием.
     vk::SamplerCreateInfo si{
-      .magFilter    = vk::Filter::eLinear,
-      .minFilter    = vk::Filter::eLinear,
-      .mipmapMode   = vk::SamplerMipmapMode::eLinear,
-      .addressModeU = vk::SamplerAddressMode::eClampToBorder,
-      .addressModeV = vk::SamplerAddressMode::eClampToBorder,
-      .addressModeW = vk::SamplerAddressMode::eClampToBorder,
-      .minLod       = 0.f,
-      .maxLod       = VK_LOD_CLAMP_NONE,
-      .borderColor  = vk::BorderColor::eFloatOpaqueWhite
+      .magFilter     = vk::Filter::eLinear,
+      .minFilter     = vk::Filter::eLinear,
+      .mipmapMode    = vk::SamplerMipmapMode::eLinear,
+      .addressModeU  = vk::SamplerAddressMode::eClampToBorder,
+      .addressModeV  = vk::SamplerAddressMode::eClampToBorder,
+      .addressModeW  = vk::SamplerAddressMode::eClampToBorder,
+      .compareEnable = vk::True,
+      .compareOp     = vk::CompareOp::eLessOrEqual,
+      .minLod        = 0.f,
+      .maxLod        = VK_LOD_CLAMP_NONE,
+      .borderColor   = vk::BorderColor::eFloatOpaqueWhite,
     };
     shadowSampler = ctx.getDevice().createSamplerUnique(si).value;
   }
@@ -1042,13 +1048,97 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
   });
 }
 
+void WorldRenderer::updateCascades(const FramePacket& packet)
+{
+  const float nearClip  = findZNear();
+  const float farClip   = findZFar();
+  const float clipRange = farClip - nearClip;
+  const float minZ = nearClip;
+  const float maxZ = nearClip + clipRange;
+  const float range = maxZ - minZ;
+  const float ratio = maxZ / minZ;
+
+  std::array<float, CASCADE_COUNT> splits{};
+  for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
+  {
+    const float p = static_cast<float>(i + 1) / static_cast<float>(CASCADE_COUNT);
+    const float logS = minZ * std::pow(ratio, p);
+    const float uniS = minZ + range * p;
+    const float d = cascadeSplitLambda * (logS - uniS) + uniS;
+    splits[i] = (d - nearClip) / clipRange;
+  }
+
+  const float aspect = static_cast<float>(resolution.x) / static_cast<float>(resolution.y);
+  const glm::mat4 invCam  = glm::inverse(packet.mainCam.projTm(aspect) * packet.mainCam.viewTm());
+  const glm::vec3 lightDir = glm::normalize(sunDirection);
+
+  float lastSplitDist = 0.0f;
+  for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
+  {
+    const float splitDist = splits[i];
+
+      glm::vec3 corners[8] = {
+      glm::vec3(-1.f,  1.f, 0.f), glm::vec3( 1.f,  1.f, 0.f),
+      glm::vec3( 1.f, -1.f, 0.f), glm::vec3(-1.f, -1.f, 0.f),
+      glm::vec3(-1.f,  1.f, 1.f), glm::vec3( 1.f,  1.f, 1.f),
+      glm::vec3( 1.f, -1.f, 1.f), glm::vec3(-1.f, -1.f, 1.f),
+    };
+    for (uint32_t j = 0; j < 8; ++j)
+    {
+      const glm::vec4 w = invCam * glm::vec4(corners[j], 1.0f);
+      corners[j] = glm::vec3(w) / w.w;
+    }
+
+    for (uint32_t j = 0; j < 4; ++j)
+    {
+      const glm::vec3 dist = corners[j + 4] - corners[j];
+      corners[j + 4] = corners[j] + dist * splitDist;
+      corners[j] = corners[j] + dist * lastSplitDist;
+    }
+
+    glm::vec3 center{0.0f};
+    for (uint32_t j = 0; j < 8; ++j) center += corners[j];
+    center /= 8.0f;
+
+    float radius = 0.0f;
+    for (uint32_t j = 0; j < 8; ++j)
+      radius = std::max(radius, glm::length(corners[j] - center));
+    radius = std::ceil(radius * 16.0f) / 16.0f;
+
+    const glm::vec3 maxExt = glm::vec3(radius);
+    const glm::vec3 minExt = -maxExt;
+
+    const glm::vec3 lightEye = center - lightDir * (-minExt.z);
+    const glm::mat4 lightView = glm::lookAtLH(lightEye, center, glm::vec3(0.f, 1.f, 0.f));
+    const glm::mat4 lightProj = glm::orthoLH_ZO(
+      minExt.x, maxExt.x, minExt.y, maxExt.y, 0.f, maxExt.z - minExt.z);
+
+    cascadeViewProj[i] = lightProj * lightView;
+    cascadeSplitDepths[i] = nearClip + splitDist * clipRange; // positive view-space Z (LH)
+
+    lastSplitDist = splitDist;
+  }
+
+  static int logFrame = 0;
+  if (++logFrame % 60 == 0)
+  {
+    for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
+    {
+      const glm::vec4 origin = cascadeViewProj[i] * glm::vec4(0.f, 0.f, 0.f, 1.f);
+      spdlog::info(
+        "Cascade {}: split={:.1f} det={:.3e} worldOriginClip=({:.2f}, {:.2f}, {:.2f}, {:.2f})",
+        i, cascadeSplitDepths[i],
+        glm::determinant(cascadeViewProj[i]),
+        origin.x, origin.y, origin.z, origin.w);
+    }
+  }
+}
+
 void WorldRenderer::debugInput(const Keyboard&) {}
 
 void WorldRenderer::update(const FramePacket& packet)
 {
   ZoneScoped;
-
-  // calc camera matrix
   {
     const float aspect = float(resolution.x) / float(resolution.y);
     worldViewProj = packet.mainCam.projTm(aspect) * packet.mainCam.viewTm();
@@ -1080,6 +1170,8 @@ void WorldRenderer::update(const FramePacket& packet)
     lightViewProj[3][0] += fracOffset.x;
     lightViewProj[3][1] += fracOffset.y;
   }
+
+  updateCascades(packet);
 
   if (previousTime <= 0.f)
     deltaTime = 1.f / 60.f;
@@ -1967,77 +2059,79 @@ void WorldRenderer::drawGui()
       ImGui::Checkbox("Debug: show morph alpha", &showMorphAlpha);
       ImGui::SliderFloat("Morph width (texels)", &clipmapMorphWidth, 1.f, 64.f, "%.1f");
 
-      ImGui::Separator();
-      ImGui::Text("Terrain shape");
-      ImGui::SliderFloat("Height scale (m)",    &terrainHeightScale,    10.f,  800.f, "%.0f");
-      ImGui::SliderFloat("Hills weight",        &terrainHillsWeight,     0.f,    3.f, "%.2f");
-      ImGui::SliderFloat("Ridges weight",       &terrainRidgesWeight,    0.f,    3.f, "%.2f");
-      ImGui::SliderFloat("Detail amplitude",    &terrainDetailAmplitude, 0.f,   0.1f, "%.3f");
+      if (ImGui::CollapsingHeader("Terrain shape"))
+      {
+        ImGui::SliderFloat("Height scale (m)",    &terrainHeightScale,    10.f,  800.f, "%.0f");
+        ImGui::SliderFloat("Hills weight",        &terrainHillsWeight,     0.f,    3.f, "%.2f");
+        ImGui::SliderFloat("Ridges weight",       &terrainRidgesWeight,    0.f,    3.f, "%.2f");
+        ImGui::SliderFloat("Detail amplitude",    &terrainDetailAmplitude, 0.f,   0.1f, "%.3f");
+      }
 
-      ImGui::Separator();
-      ImGui::Text("fBm");
+      if (ImGui::CollapsingHeader("fBm"))
       {
         float period = terrainBaseFreq > 1e-7f ? 1.0f / terrainBaseFreq : 1024.f;
         if (ImGui::SliderFloat("Base period (m)", &period, 64.f, 8192.f, "%.0f"))
           terrainBaseFreq = 1.0f / period;
+        ImGui::SliderInt  ("Octaves",           &terrainOctaves,       1,    8);
+        ImGui::SliderFloat("Persistence",       &terrainPersistence,   0.1f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Lacunarity",        &terrainLacunarity,    1.2f, 3.0f, "%.2f");
       }
-      ImGui::SliderInt  ("Octaves",           &terrainOctaves,       1,    8);
-      ImGui::SliderFloat("Persistence",       &terrainPersistence,   0.1f, 1.0f, "%.2f");
-      ImGui::SliderFloat("Lacunarity",        &terrainLacunarity,    1.2f, 3.0f, "%.2f");
 
-      ImGui::Separator();
-      ImGui::Text("Shaping");
-      ImGui::SliderFloat("Bias power",        &terrainBiasPower,     0.2f, 4.0f, "%.2f");
-      ImGui::SliderFloat("Ocean cut",         &terrainOceanCut,      0.0f, 0.6f, "%.2f");
+      if (ImGui::CollapsingHeader("Shaping"))
+      {
+        ImGui::SliderFloat("Bias power",        &terrainBiasPower,     0.2f, 4.0f, "%.2f");
+        ImGui::SliderFloat("Ocean cut",         &terrainOceanCut,      0.0f, 0.6f, "%.2f");
+      }
 
-      ImGui::Separator();
-      ImGui::Text("Mountain mask");
+      if (ImGui::CollapsingHeader("Mountain mask"))
       {
         float maskPeriod = terrainMountainMaskFreq > 1e-7f
           ? 1.0f / terrainMountainMaskFreq : 0.f;
         if (ImGui::SliderFloat("Mask period (m)", &maskPeriod, 512.f, 16384.f, "%.0f"))
           terrainMountainMaskFreq = maskPeriod > 0.f ? 1.0f / maskPeriod : terrainMountainMaskFreq;
+        ImGui::SliderFloat("Mask offset",       &terrainMountainMaskOffset, -1.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Mask width",        &terrainMountainMaskWidth,   0.05f, 1.0f, "%.2f");
       }
-      ImGui::SliderFloat("Mask offset",       &terrainMountainMaskOffset, -1.0f, 1.0f, "%.2f");
-      ImGui::SliderFloat("Mask width",        &terrainMountainMaskWidth,   0.05f, 1.0f, "%.2f");
 
-      ImGui::Separator();
-      ImGui::Text("Domain warp");
-      ImGui::SliderFloat("Warp amplitude (m)", &terrainWarpAmp,      0.f,  400.f, "%.0f");
+      if (ImGui::CollapsingHeader("Domain warp"))
       {
+        ImGui::SliderFloat("Warp amplitude (m)", &terrainWarpAmp,      0.f,  400.f, "%.0f");
         float warpPeriod = terrainWarpFreq > 1e-7f ? 1.0f / terrainWarpFreq : 0.f;
         if (ImGui::SliderFloat("Warp period (m)", &warpPeriod, 64.f, 4096.f, "%.0f"))
           terrainWarpFreq = warpPeriod > 0.f ? 1.0f / warpPeriod : terrainWarpFreq;
       }
 
-      ImGui::Separator();
-      ImGui::Text("Ridged multifractal");
-      ImGui::SliderFloat("Ridge sharpness",   &terrainRidgedSharpness, 1.0f, 6.0f, "%.1f");
+      if (ImGui::CollapsingHeader("Ridged multifractal"))
+      {
+        ImGui::SliderFloat("Ridge sharpness",   &terrainRidgedSharpness, 1.0f, 6.0f, "%.1f");
+      }
 
-      ImGui::Separator();
-      ImGui::Text("Splatting");
-      ImGui::SliderInt("Live levels (close-up)", &liveLevelsCount, 0, CLIPMAP_LEVELS);
-      ImGui::SameLine();
-      ImGui::TextDisabled("(?)");
-      if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-          "Number of innermost clipmap levels that compute splatting per-fragment\n"
-          "from full-resolution detail textures (sharp close-up).\n"
-          "Remaining outer levels read from pre-baked 256x256 albedo cache (fast).\n"
-          "0   = all baked (fastest, blurry close-up)\n"
-          "%d  = all live  (slowest, sharpest)\n"
-          "3   = balanced (default): innermost 3 rings sharp, rest cached.",
-          CLIPMAP_LEVELS);
+      if (ImGui::CollapsingHeader("Splatting"))
+      {
+        ImGui::SliderInt("Live levels (close-up)", &liveLevelsCount, 0, CLIPMAP_LEVELS);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip(
+            "Number of innermost clipmap levels that compute splatting per-fragment\n"
+            "from full-resolution detail textures (sharp close-up).\n"
+            "Remaining outer levels read from pre-baked 256x256 albedo cache (fast).\n"
+            "0 = all baked (fastest, blurry close-up)\n"
+            "%d = all live  (slowest, sharpest)\n"
+            "3 = balanced (default): innermost 3 rings sharp, rest cached.",
+            CLIPMAP_LEVELS);
 
-      ImGui::SliderFloat("Ground-Grass height", &terrainHeightLow,      -50.f, 100.f, "%.1f");
-      ImGui::SliderFloat("Grass-Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
-      ImGui::SliderFloat("Blend sharpness",    &terrainBlendSharpness,  0.5f, 40.f,  "%.1f");
-      ImGui::SliderFloat("Rock slope",         &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
+        ImGui::SliderFloat("Ground-Grass height", &terrainHeightLow,      -50.f, 100.f, "%.1f");
+        ImGui::SliderFloat("Grass-Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
+        ImGui::SliderFloat("Blend sharpness",    &terrainBlendSharpness,  0.5f, 40.f,  "%.1f");
+        ImGui::SliderFloat("Rock slope",         &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
+      }
 
-      ImGui::Separator();
-      ImGui::Text("Detail textures");
-      ImGui::SliderFloat("Tile period (m)",  &detailTilePeriod,     2.f,  256.f, "%.0f");
-      ImGui::SliderFloat("Normal strength",  &detailNormalStrength, 0.f,    2.f, "%.2f");
+      if (ImGui::CollapsingHeader("Detail textures"))
+      {
+        ImGui::SliderFloat("Tile period (m)",  &detailTilePeriod,     2.f,  256.f, "%.0f");
+        ImGui::SliderFloat("Normal strength",  &detailNormalStrength, 0.f,    2.f, "%.2f");
+      }
     }
   }
 
@@ -2045,20 +2139,22 @@ void WorldRenderer::drawGui()
     "Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
   ImGui::Combo("Debug view", &debugMode, debugModes, IM_ARRAYSIZE(debugModes));
 
-  ImGui::Separator();
-  ImGui::Text("Shadows");
-  ImGui::Checkbox("Enable shadows", &enableShadows);
-  ImGui::SliderFloat("Ortho half size (m)", &shadowOrthoHalfSize, 200.f, 2000.f, "%.0f");
-  ImGui::Checkbox("Show shadow map overlay", &drawShadowMapOverlay);
+  if (ImGui::CollapsingHeader("Shadows"))
+  {
+    ImGui::Checkbox("Enable shadows", &enableShadows);
+    ImGui::SliderFloat("Ortho half size (m)", &shadowOrthoHalfSize, 200.f, 2000.f, "%.0f");
+    ImGui::Checkbox("Show shadow map overlay", &drawShadowMapOverlay);
+  }
 
-  ImGui::Separator();
-  ImGui::Text("Adaptive exposure");
-  const char* tonemaps[] = {"Reinhard", "ACES", "None (clamp)"};
-  ImGui::Combo("Tonemap", &tonemapMode, tonemaps, IM_ARRAYSIZE(tonemaps));
-  ImGui::SliderFloat("Adaptation speed", &adaptationSpeed, 0.1f, 10.f, "%.2f");
-  ImGui::SliderFloat("Key value", &keyValue, 0.01f, 1.0f, "%.3f");
-  ImGui::SliderFloat("Min exposure", &minExposure, 0.001f, 1.f, "%.3f");
-  ImGui::SliderFloat("Max exposure", &maxExposure, 1.f, 100.f, "%.1f");
+  if (ImGui::CollapsingHeader("Adaptive exposure"))
+  {
+    const char* tonemaps[] = {"Reinhard", "ACES", "None (clamp)"};
+    ImGui::Combo("Tonemap", &tonemapMode, tonemaps, IM_ARRAYSIZE(tonemaps));
+    ImGui::SliderFloat("Adaptation speed", &adaptationSpeed, 0.1f, 10.f, "%.2f");
+    ImGui::SliderFloat("Key value", &keyValue, 0.01f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Min exposure", &minExposure, 0.001f, 1.f, "%.3f");
+    ImGui::SliderFloat("Max exposure", &maxExposure, 1.f, 100.f, "%.1f");
+  }
 
   ImGui::Text(
     "Application average %.1f ms/frame (%.1f FPS)",

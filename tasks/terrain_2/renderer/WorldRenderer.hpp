@@ -301,8 +301,14 @@ private:
   bool drawShadowMapOverlay = false;
   bool enableShadows = true;
 
+  static constexpr uint32_t CASCADE_COUNT = 4;
+  std::array<glm::mat4, CASCADE_COUNT> cascadeViewProj{};
+  std::array<float, CASCADE_COUNT> cascadeSplitDepths{};
+  float cascadeSplitLambda = 0.95f;
+
   void updateClipmapLevels();
   void renderShadowPass(vk::CommandBuffer cmd_buf);
+  void updateCascades(const FramePacket& packet);
 
   glm::uvec2 resolution;
 };
