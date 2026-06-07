@@ -933,57 +933,57 @@ void WorldRenderer::loadShaders()
 {
   etna::create_program(
     "static_mesh_material",
-    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+    {RENDERER_SHADERS_ROOT "static_mesh.frag.spv",
+     RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
   etna::create_program(
-    "static_mesh", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
+    "static_mesh", {RENDERER_SHADERS_ROOT "static_mesh.vert.spv"});
 
   etna::create_program(
     "postprocess",
-    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "postprocess.vert.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "postprocess.frag.spv"});
+    {RENDERER_SHADERS_ROOT "postprocess.vert.spv",
+     RENDERER_SHADERS_ROOT "postprocess.frag.spv"});
 
   etna::create_program(
-    "clear_stats", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clear_stats.comp.spv"});
-  etna::create_program("minmax", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "minmax.comp.spv"});
-  etna::create_program("histogram", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "histogram.comp.spv"});
-  etna::create_program("reduce", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "reduce.comp.spv"});
+    "clear_stats", {RENDERER_SHADERS_ROOT "clear_stats.comp.spv"});
+  etna::create_program("minmax", {RENDERER_SHADERS_ROOT "minmax.comp.spv"});
+  etna::create_program("histogram", {RENDERER_SHADERS_ROOT "histogram.comp.spv"});
+  etna::create_program("reduce", {RENDERER_SHADERS_ROOT "reduce.comp.spv"});
 
   etna::create_program(
     "skybox",
-    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "skybox.vert.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "skybox.frag.spv"});
+    {RENDERER_SHADERS_ROOT "skybox.vert.spv",
+     RENDERER_SHADERS_ROOT "skybox.frag.spv"});
 
   etna::create_program(
-    "cull_count", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "cull_count.comp.spv"});
+    "cull_count", {RENDERER_SHADERS_ROOT "cull_count.comp.spv"});
   etna::create_program(
-    "prefix_sum", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "prefix_sum.comp.spv"});
+    "prefix_sum", {RENDERER_SHADERS_ROOT "prefix_sum.comp.spv"});
   etna::create_program(
-    "cull_write", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "cull_write.comp.spv"});
+    "cull_write", {RENDERER_SHADERS_ROOT "cull_write.comp.spv"});
 
-  etna::create_program("perlin", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "perlin.comp.spv"});
-  etna::create_program("normal", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "normal.comp.spv"});
+  etna::create_program("perlin", {RENDERER_SHADERS_ROOT "perlin.comp.spv"});
+  etna::create_program("normal", {RENDERER_SHADERS_ROOT "normal.comp.spv"});
   etna::create_program(
     "clipmap_terrain",
-    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain.vert.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain.frag.spv"});
+    {RENDERER_SHADERS_ROOT "clipmap_terrain.vert.spv",
+     RENDERER_SHADERS_ROOT "clipmap_terrain.frag.spv"});
   etna::create_program(
     "clipmap_terrain_depth",
-    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain_depth.vert.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_terrain_depth.frag.spv"});
+    {RENDERER_SHADERS_ROOT "clipmap_terrain_depth.vert.spv",
+     RENDERER_SHADERS_ROOT "clipmap_terrain_depth.frag.spv"});
   etna::create_program(
-    "clipmap_fill", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_fill.comp.spv"});
+    "clipmap_fill", {RENDERER_SHADERS_ROOT "clipmap_fill.comp.spv"});
   etna::create_program(
-    "clipmap_splat", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_splat.comp.spv"});
+    "clipmap_splat", {RENDERER_SHADERS_ROOT "clipmap_splat.comp.spv"});
   etna::create_program(
-    "detail_gen", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "detail_gen.comp.spv"});
-  etna::create_program("fog", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "fog.comp.spv"});
+    "detail_gen", {RENDERER_SHADERS_ROOT "detail_gen.comp.spv"});
+  etna::create_program("fog", {RENDERER_SHADERS_ROOT "fog.comp.spv"});
   etna::create_program(
     "terrain_render",
-    {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "quad.vert.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tesc.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.tese.spv",
-     BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "terrain.frag.spv"});
+    {RENDERER_SHADERS_ROOT "quad.vert.spv",
+     RENDERER_SHADERS_ROOT "terrain.tesc.spv",
+     RENDERER_SHADERS_ROOT "terrain.tese.spv",
+     RENDERER_SHADERS_ROOT "terrain.frag.spv"});
 }
 
 void WorldRenderer::setupPipelines(vk::Format swapchain_format)

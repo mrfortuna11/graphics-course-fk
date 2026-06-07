@@ -1,5 +1,5 @@
 
-add_executable(bindless_and_pbr_renderer
+add_executable(renderer
   main.cpp
   App.cpp
   Renderer.cpp
@@ -7,10 +7,10 @@ add_executable(bindless_and_pbr_renderer
   ClipmapMesh.cpp
 )
 
-target_link_libraries(bindless_and_pbr_renderer
+target_link_libraries(renderer
   PRIVATE glfw etna glm::glm wsi gui scene render_utils)
 
-target_add_shaders(bindless_and_pbr_renderer
+target_add_shaders(renderer
   shaders/static_mesh.frag
   shaders/static_mesh.vert
   shaders/postprocess.vert

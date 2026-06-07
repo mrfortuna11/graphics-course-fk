@@ -40,7 +40,7 @@ void Renderer::initVulkan(std::span<const char*> instance_extensions)
 
   etna::initialize(
     etna::InitParams{
-      .applicationName = "bindless_and_pbr_renderer",
+      .applicationName = "renderer",
       .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
       .instanceExtensions = instanceExtensions,
       .deviceExtensions = deviceExtensions,
@@ -107,7 +107,7 @@ void Renderer::debugInput(const Keyboard& kb)
   if (kb[KeyboardKey::kB] == ButtonState::Falling)
   {
     const int retval = std::system("cd " GRAPHICS_COURSE_ROOT "/build"
-                                   " && cmake --build . --target bindless_and_pbr_renderer_shaders");
+                                   " && cmake --build . --target renderer_shaders");
     if (retval != 0)
       spdlog::warn("Shader recompilation returned a non-zero return code!");
     else
