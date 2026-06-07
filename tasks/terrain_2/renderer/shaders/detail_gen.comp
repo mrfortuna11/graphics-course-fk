@@ -1,0 +1,74 @@
+#version 450
+
+// Generates a 512x512 R32F tileable detail noise texture (mip 0)
+// Mips are then produced by linear blits in CPU code
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, r32f) restrict writeonly uniform image2D detailTex;
+
+const int   TILE_SIZE = 512;
+const int   FBM_OCTAVES = 4;
+const float BASE_FREQ_CELLS = 16.0;
+
+vec2 randomGradient(in ivec2 coord, int wrap)
+{
+  coord = ((coord % wrap) + wrap) % wrap;
+  const uint w = 32u;
+  const uint s = w / 2u;
+  uint a = uint(coord.x);
+  uint b = uint(coord.y);
+  a *= 3284157443u;
+  b ^= a << s | a >> w - s;
+  b *= 1911520717u;
+  a ^= b << s | b >> w - s;
+  a *= 2048419325u;
+  float r = float(a) * (3.14159265 / float(~(~0u >> 1u)));
+  return vec2(cos(r), sin(r));
+}
+
+float dotGridGradient(in vec2 p, in ivec2 cell, int wrap)
+{
+  return dot(randomGradient(cell, wrap), p - vec2(cell));
+}
+
+float perlin(in vec2 p, int wrap)
+{
+  int x0 = int(floor(p.x)), x1 = x0 + 1;
+  int y0 = int(floor(p.y)), y1 = y0 + 1;
+  vec2 t = p - vec2(x0, y0);
+  vec2 s = (3.0 - t * 2.0) * t * t;
+  float n0 = dotGridGradient(p, ivec2(x0, y0), wrap);
+  float n1 = dotGridGradient(p, ivec2(x1, y0), wrap);
+  float ix0 = mix(n0, n1, s.x);
+  n0 = dotGridGradient(p, ivec2(x0, y1), wrap);
+  n1 = dotGridGradient(p, ivec2(x1, y1), wrap);
+  return mix(ix0, mix(n0, n1, s.x), s.y);
+}
+
+void main()
+{
+  ivec2 c = ivec2(gl_GlobalInvocationID.xy);
+  if (c.x >= TILE_SIZE || c.y >= TILE_SIZE)
+    return;
+
+  vec2 u = vec2(c) / float(TILE_SIZE);
+
+  float v = 0.0;
+  float amp = 1.0;
+  float totalAmp = 0.0;
+  float freqCells = BASE_FREQ_CELLS;
+
+  for (int i = 0; i < FBM_OCTAVES; ++i)
+  {
+    vec2 p = u * freqCells;
+    int wrap = int(freqCells);
+    v += perlin(p, wrap) * amp;
+    totalAmp += amp;
+    freqCells *= 2.0;
+    amp       *= 0.5;
+  }
+
+  v /= totalAmp; // approximately in [-1, 1]
+
+  imageStore(detailTex, c, vec4(v, 0.0, 0.0, 0.0));
+}

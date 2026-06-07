@@ -1,0 +1,92 @@
+#version 460
+
+layout(local_size_x = 1024) in;
+
+layout(push_constant) uniform PC
+{
+  uint relemCount;
+} pc;
+
+layout(set = 0, binding = 0) readonly buffer RelemVisibleCounts   { uint counts[];    };
+layout(set = 0, binding = 1)          buffer RelemInstanceOffsets { uint offsets[];   };
+layout(set = 0, binding = 2)          buffer RelemWriteCursors    { uint cursors[];   };
+layout(set = 0, binding = 3)          buffer IndirectCmds         { uint indirect[];  };
+layout(set = 0, binding = 4) readonly buffer RelemDrawTemplates   { uvec4 templates[]; }; // {indexCount, firstIndex, vertexOffset, pad}
+layout(set = 0, binding = 5)          buffer DrawMapping          { uint drawMap[];   };
+
+shared uint sdata[2048];
+
+uint nextPow2(uint v)
+{
+  v--;
+  v |= v >> 1u; v |= v >> 2u; v |= v >> 4u;
+  v |= v >> 8u; v |= v >> 16u;
+  return v + 1u;
+}
+
+void main()
+{
+  if (pc.relemCount == 0u)
+    return;
+
+  uint tid = gl_LocalInvocationID.x;
+  uint n = nextPow2(min(pc.relemCount, 2048u));
+
+  uint ai = 2u * tid;
+  uint bi = 2u * tid + 1u;
+  sdata[ai] = (ai < pc.relemCount) ? counts[ai] : 0u;
+  sdata[bi] = (bi < pc.relemCount) ? counts[bi] : 0u;
+
+  uint offset = 1u;
+  for (uint d = n >> 1u; d > 0u; d >>= 1u)
+  {
+    barrier();
+    if (tid < d)
+    {
+      uint a = offset * (2u * tid + 1u) - 1u;
+      uint b = offset * (2u * tid + 2u) - 1u;
+      sdata[b] += sdata[a];
+    }
+    offset <<= 1u;
+  }
+
+  if (tid == 0u)
+    sdata[n - 1u] = 0u;
+
+  for (uint d = 1u; d < n; d <<= 1u)
+  {
+    offset >>= 1u;
+    barrier();
+    if (tid < d)
+    {
+      uint a = offset * (2u * tid + 1u) - 1u;
+      uint b = offset * (2u * tid + 2u) - 1u;
+      uint t = sdata[a];
+      sdata[a] = sdata[b];
+      sdata[b] += t;
+    }
+  }
+  barrier();
+
+  for (uint i = 0u; i < 2u; ++i)
+  {
+    uint slot = 2u * tid + i;
+    if (slot >= pc.relemCount)
+      break;
+
+    uint firstInst = sdata[slot];
+
+    offsets[slot] = firstInst;
+    cursors[slot] = 0u;
+    drawMap[slot] = slot;
+
+    // Fill VkDrawIndexedIndirectCommand (5 × uint):
+    uvec4 tmpl    = templates[slot];
+    uint  base    = 5u * slot;
+    indirect[base + 0u] = tmpl.x;          // indexCount
+    indirect[base + 1u] = counts[slot];    // instanceCount (0 → GPU no-op)
+    indirect[base + 2u] = tmpl.y;          // firstIndex
+    indirect[base + 3u] = tmpl.z;          // vertexOffset  (bit-identical to int)
+    indirect[base + 4u] = firstInst;       // firstInstance
+  }
+}
