@@ -330,7 +330,7 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
     });
   clipmapLevelsBuffer.map();
 
-  static constexpr std::size_t DETAIL_TEX_MIPS = 11;
+  static constexpr std::size_t DETAIL_ARRAY_MIPS = 11;
   detailColorArray = ctx.createImage(
     etna::Image::CreateInfo{
       .extent = vk::Extent3D{1024, 1024, 1},
@@ -339,7 +339,7 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
         vk::ImageUsageFlagBits::eTransferSrc,
       .layers = static_cast<std::size_t>(DETAIL_LAYERS),
-      .mipLevels = DETAIL_TEX_MIPS,
+      .mipLevels = DETAIL_ARRAY_MIPS,
     });
 
   detailHeightArray = ctx.createImage(
@@ -350,7 +350,7 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
         vk::ImageUsageFlagBits::eTransferSrc,
       .layers = static_cast<std::size_t>(DETAIL_LAYERS),
-      .mipLevels = DETAIL_TEX_MIPS,
+      .mipLevels = DETAIL_ARRAY_MIPS,
     });
 
   loadDetailTextures();
