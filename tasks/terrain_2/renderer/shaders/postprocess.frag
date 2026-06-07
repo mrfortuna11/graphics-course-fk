@@ -12,10 +12,12 @@ layout(set = 0, binding = 1) readonly buffer LuminanceStats
   uint  histogram[HISTOGRAM_BINS];
   float smoothedExposure;
 } stats;
+layout(set = 0, binding = 2) uniform sampler2D fogImage; // rgb=inscatter, a=transmittance
 
 layout(push_constant) uniform PC
 {
   uint tonemapMode;  // 0 = Reinhard, 1 = ACES, 2 = None (linear clamp)
+  uint fogEnabled;   // 1 = fog before tonemapping
 } pc;
 
 layout(location = 0) in vec2 vTexCoord;
@@ -45,6 +47,13 @@ vec3 aces(vec3 x)
 void main()
 {
   vec3 hdr = texture(hdrImage, vTexCoord).rgb;
+
+  if (pc.fogEnabled == 1u)
+  {
+    vec4 fog = texture(fogImage, vTexCoord);
+    hdr = hdr * fog.a + fog.rgb;
+  }
+
   float exposure = stats.smoothedExposure;
   if (exposure <= 0.0) exposure = 1.0; // safety for the very first frame
 

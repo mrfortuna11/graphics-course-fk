@@ -31,23 +31,22 @@ WorldRenderer::WorldRenderer()
 {
   loadSettings("terrain_settings.txt");
 
-  auto& ctx   = etna::get_context();
+  auto& ctx = etna::get_context();
   auto device = ctx.getDevice();
-  const float maxAniso = std::min(
-    4.0f,
-    ctx.getPhysicalDevice().getProperties().limits.maxSamplerAnisotropy);
+  const float maxAniso =
+    std::min(4.0f, ctx.getPhysicalDevice().getProperties().limits.maxSamplerAnisotropy);
   vk::SamplerCreateInfo si{
-    .magFilter        = vk::Filter::eLinear,
-    .minFilter        = vk::Filter::eLinear,
-    .mipmapMode       = vk::SamplerMipmapMode::eLinear,
-    .addressModeU     = vk::SamplerAddressMode::eRepeat,
-    .addressModeV     = vk::SamplerAddressMode::eRepeat,
-    .addressModeW     = vk::SamplerAddressMode::eRepeat,
+    .magFilter = vk::Filter::eLinear,
+    .minFilter = vk::Filter::eLinear,
+    .mipmapMode = vk::SamplerMipmapMode::eLinear,
+    .addressModeU = vk::SamplerAddressMode::eRepeat,
+    .addressModeV = vk::SamplerAddressMode::eRepeat,
+    .addressModeW = vk::SamplerAddressMode::eRepeat,
     .anisotropyEnable = vk::True,
-    .maxAnisotropy    = maxAniso,
-    .compareEnable    = vk::False,
-    .minLod           = 0.0f,
-    .maxLod           = VK_LOD_CLAMP_NONE,
+    .maxAnisotropy = maxAniso,
+    .compareEnable = vk::False,
+    .minLod = 0.0f,
+    .maxLod = VK_LOD_CLAMP_NONE,
   };
   detailSampler = device.createSamplerUnique(si).value;
 }
@@ -63,7 +62,8 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .extent = vk::Extent3D{resolution.x, resolution.y, 1},
       .name = "main_view_depth",
       .format = vk::Format::eD32Sfloat,
-      .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+      .imageUsage =
+        vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
     });
 
   hdrTarget = ctx.createImage(
@@ -81,31 +81,55 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .name = "hdr_sampler",
     });
 
-  shadowMap = ctx.createImage(etna::Image::CreateInfo{
-    .extent     = vk::Extent3D{SHADOWMAP_DIM, SHADOWMAP_DIM, 1},
-    .name       = "shadow_map",
-    .format     = vk::Format::eD32Sfloat,
-    .imageUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment
-                | vk::ImageUsageFlagBits::eSampled,
-  });
+  // Volumetric fog
+  fogResolution = (resolution + glm::uvec2(1u)) / 2u;
+  fogTarget = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{fogResolution.x, fogResolution.y, 1},
+      .name = "fog_target",
+      .format = vk::Format::eR16G16B16A16Sfloat,
+      .imageUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+    });
+
+  // Linear clamp
+  fogSampler = etna::Sampler(
+    etna::Sampler::CreateInfo{
+      .filter = vk::Filter::eLinear,
+      .addressMode = vk::SamplerAddressMode::eClampToEdge,
+      .name = "fog_sampler",
+    });
+
+  // Nearest clamp
+  depthPointSampler = etna::Sampler(
+    etna::Sampler::CreateInfo{
+      .filter = vk::Filter::eNearest,
+      .addressMode = vk::SamplerAddressMode::eClampToEdge,
+      .mipmapMode = vk::SamplerMipmapMode::eNearest,
+      .name = "depth_point_sampler",
+    });
+
+  shadowMap = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{SHADOWMAP_DIM, SHADOWMAP_DIM, 1},
+      .name = "shadow_map",
+      .format = vk::Format::eD32Sfloat,
+      .imageUsage =
+        vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
+    });
 
   {
-    // Hardware shadow comparison sampler: при выборке через sampler2DShadow
-    // GPU автоматически сравнивает refValue с каждым из 4 текстелей (linear
-    // filter) и билинейно интерполирует результаты → бесплатный 2×2 PCF
-    // с правильным sub-texel взвешиванием.
     vk::SamplerCreateInfo si{
-      .magFilter     = vk::Filter::eLinear,
-      .minFilter     = vk::Filter::eLinear,
-      .mipmapMode    = vk::SamplerMipmapMode::eLinear,
-      .addressModeU  = vk::SamplerAddressMode::eClampToBorder,
-      .addressModeV  = vk::SamplerAddressMode::eClampToBorder,
-      .addressModeW  = vk::SamplerAddressMode::eClampToBorder,
+      .magFilter = vk::Filter::eLinear,
+      .minFilter = vk::Filter::eLinear,
+      .mipmapMode = vk::SamplerMipmapMode::eLinear,
+      .addressModeU = vk::SamplerAddressMode::eClampToBorder,
+      .addressModeV = vk::SamplerAddressMode::eClampToBorder,
+      .addressModeW = vk::SamplerAddressMode::eClampToBorder,
       .compareEnable = vk::True,
-      .compareOp     = vk::CompareOp::eLessOrEqual,
-      .minLod        = 0.f,
-      .maxLod        = VK_LOD_CLAMP_NONE,
-      .borderColor   = vk::BorderColor::eFloatOpaqueWhite,
+      .compareOp = vk::CompareOp::eLessOrEqual,
+      .minLod = 0.f,
+      .maxLod = VK_LOD_CLAMP_NONE,
+      .borderColor = vk::BorderColor::eFloatOpaqueWhite,
     };
     shadowSampler = ctx.getDevice().createSamplerUnique(si).value;
   }
@@ -239,87 +263,95 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
 
   constexpr vk::DeviceSize LUMINANCE_STATS_BYTES =
     sizeof(std::uint32_t) * 2u + sizeof(std::uint32_t) * 128u + sizeof(float);
-  luminanceStatsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size = LUMINANCE_STATS_BYTES,
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
-    .name = "luminance_stats",
-  });
+  luminanceStatsBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = LUMINANCE_STATS_BYTES,
+      .bufferUsage =
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+      .memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY,
+      .name = "luminance_stats",
+    });
 
-  perlinTex = ctx.createImage(etna::Image::CreateInfo{
-    .extent = vk::Extent3D{4096, 4096, 1},
-    .name = "perlin_noise",
-    .format = vk::Format::eR32Sfloat,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
-  });
+  perlinTex = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{4096, 4096, 1},
+      .name = "perlin_noise",
+      .format = vk::Format::eR32Sfloat,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+    });
 
-  normalMap = ctx.createImage(etna::Image::CreateInfo{
-    .extent = vk::Extent3D{4096, 4096, 1},
-    .name = "terrain_normal_map",
-    .format = vk::Format::eR8G8B8A8Snorm,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
-  });
+  normalMap = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{4096, 4096, 1},
+      .name = "terrain_normal_map",
+      .format = vk::Format::eR8G8B8A8Snorm,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+    });
 
   clipmapMesh = std::make_unique<ClipmapMesh>(255, *transferHelper);
   clipmapFootprint = clipmapMesh->buildLevelFootprints().front();
 
-  clipmapHeightmapArray = ctx.createImage(etna::Image::CreateInfo{
-    .extent    = vk::Extent3D{256, 256, 1},
-    .name      = "clipmap_heightmap_array",
-    .format    = vk::Format::eR32Sfloat,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
-    .layers    = static_cast<std::size_t>(CLIPMAP_LEVELS),
-  });
+  clipmapHeightmapArray = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{256, 256, 1},
+      .name = "clipmap_heightmap_array",
+      .format = vk::Format::eR32Sfloat,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+      .layers = static_cast<std::size_t>(CLIPMAP_LEVELS),
+    });
 
-  clipmapAlbedoArray = ctx.createImage(etna::Image::CreateInfo{
-    .extent    = vk::Extent3D{256, 256, 1},
-    .name      = "clipmap_albedo_array",
-    .format    = vk::Format::eR8G8B8A8Unorm,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
-                | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
-    .layers    = static_cast<std::size_t>(CLIPMAP_LEVELS),
-    .mipLevels = static_cast<std::size_t>(CLIPMAP_ALBEDO_MIPS),
-  });
+  clipmapAlbedoArray = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{256, 256, 1},
+      .name = "clipmap_albedo_array",
+      .format = vk::Format::eR8G8B8A8Unorm,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+        vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+      .layers = static_cast<std::size_t>(CLIPMAP_LEVELS),
+      .mipLevels = static_cast<std::size_t>(CLIPMAP_ALBEDO_MIPS),
+    });
 
-  detailTex = ctx.createImage(etna::Image::CreateInfo{
-    .extent     = vk::Extent3D{DETAIL_TEX_SIZE, DETAIL_TEX_SIZE, 1},
-    .name       = "clipmap_detail_tile",
-    .format     = vk::Format::eR32Sfloat,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage
-                | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
-    .mipLevels  = static_cast<std::size_t>(DETAIL_TEX_MIPS),
-  });
+  detailTex = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{DETAIL_TEX_SIZE, DETAIL_TEX_SIZE, 1},
+      .name = "clipmap_detail_tile",
+      .format = vk::Format::eR32Sfloat,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+        vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+      .mipLevels = static_cast<std::size_t>(DETAIL_TEX_MIPS),
+    });
 
-  clipmapLevelsBuffer = ctx.createBuffer(etna::Buffer::CreateInfo{
-    .size        = CLIPMAP_LEVELS * sizeof(glm::vec4),
-    .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
-    .memoryUsage = VMA_MEMORY_USAGE_CPU_TO_GPU,
-    .name        = "clipmap_levels",
-  });
+  clipmapLevelsBuffer = ctx.createBuffer(
+    etna::Buffer::CreateInfo{
+      .size = CLIPMAP_LEVELS * sizeof(glm::vec4),
+      .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
+      .memoryUsage = VMA_MEMORY_USAGE_CPU_TO_GPU,
+      .name = "clipmap_levels",
+    });
   clipmapLevelsBuffer.map();
 
   static constexpr std::size_t DETAIL_TEX_MIPS = 11;
-  detailColorArray = ctx.createImage(etna::Image::CreateInfo{
-    .extent     = vk::Extent3D{1024, 1024, 1},
-    .name       = "detail_color_array",
-    .format     = vk::Format::eR8G8B8A8Srgb,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled
-                | vk::ImageUsageFlagBits::eTransferDst
-                | vk::ImageUsageFlagBits::eTransferSrc,
-    .layers     = static_cast<std::size_t>(DETAIL_LAYERS),
-    .mipLevels  = DETAIL_TEX_MIPS,
-  });
+  detailColorArray = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{1024, 1024, 1},
+      .name = "detail_color_array",
+      .format = vk::Format::eR8G8B8A8Srgb,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
+        vk::ImageUsageFlagBits::eTransferSrc,
+      .layers = static_cast<std::size_t>(DETAIL_LAYERS),
+      .mipLevels = DETAIL_TEX_MIPS,
+    });
 
-  detailHeightArray = ctx.createImage(etna::Image::CreateInfo{
-    .extent     = vk::Extent3D{1024, 1024, 1},
-    .name       = "detail_height_array",
-    .format     = vk::Format::eR8Unorm,
-    .imageUsage = vk::ImageUsageFlagBits::eSampled
-                | vk::ImageUsageFlagBits::eTransferDst
-                | vk::ImageUsageFlagBits::eTransferSrc,
-    .layers     = static_cast<std::size_t>(DETAIL_LAYERS),
-    .mipLevels  = DETAIL_TEX_MIPS,
-  });
+  detailHeightArray = ctx.createImage(
+    etna::Image::CreateInfo{
+      .extent = vk::Extent3D{1024, 1024, 1},
+      .name = "detail_height_array",
+      .format = vk::Format::eR8Unorm,
+      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
+        vk::ImageUsageFlagBits::eTransferSrc,
+      .layers = static_cast<std::size_t>(DETAIL_LAYERS),
+      .mipLevels = DETAIL_TEX_MIPS,
+    });
 
   loadDetailTextures();
 }
@@ -556,11 +588,12 @@ void WorldRenderer::loadDetailTextures()
     else
     {
       transferHelper->uploadImage(
-        *oneShot, detailColorArray,
-        0, static_cast<std::uint32_t>(i),
+        *oneShot,
+        detailColorArray,
+        0,
+        static_cast<std::uint32_t>(i),
         std::span<const std::byte>{
-          reinterpret_cast<const std::byte*>(data),
-          static_cast<std::size_t>(w * h * 4)});
+          reinterpret_cast<const std::byte*>(data), static_cast<std::size_t>(w * h * 4)});
       stbi_image_free(data);
     }
   }
@@ -574,48 +607,64 @@ void WorldRenderer::loadDetailTextures()
     else
     {
       transferHelper->uploadImage(
-        *oneShot, detailHeightArray,
-        0, static_cast<std::uint32_t>(i),
+        *oneShot,
+        detailHeightArray,
+        0,
+        static_cast<std::uint32_t>(i),
         std::span<const std::byte>{
-          reinterpret_cast<const std::byte*>(data),
-          static_cast<std::size_t>(w * h * 1)});
+          reinterpret_cast<const std::byte*>(data), static_cast<std::size_t>(w * h * 1)});
       stbi_image_free(data);
     }
   }
   const auto generateMips = [&](etna::Image& img) {
-    constexpr uint32_t MIPS   = 11;          // log2(1024)+1
+    constexpr uint32_t MIPS = 11; // log2(1024)+1
     constexpr uint32_t LAYERS = DETAIL_LAYERS;
 
     auto cmdBuf = oneShot->start();
     ETNA_CHECK_VK_RESULT(cmdBuf.begin(vk::CommandBufferBeginInfo{}));
 
-    auto barrierMip = [&](uint32_t baseMip, uint32_t levelCount,
-                          vk::ImageLayout oldL, vk::ImageLayout newL,
-                          vk::PipelineStageFlags2 srcS, vk::AccessFlags2 srcA,
-                          vk::PipelineStageFlags2 dstS, vk::AccessFlags2 dstA) {
+    auto barrierMip = [&](
+                        uint32_t baseMip,
+                        uint32_t levelCount,
+                        vk::ImageLayout oldL,
+                        vk::ImageLayout newL,
+                        vk::PipelineStageFlags2 srcS,
+                        vk::AccessFlags2 srcA,
+                        vk::PipelineStageFlags2 dstS,
+                        vk::AccessFlags2 dstA) {
       vk::ImageMemoryBarrier2 b{
-        .srcStageMask  = srcS, .srcAccessMask = srcA,
-        .dstStageMask  = dstS, .dstAccessMask = dstA,
-        .oldLayout     = oldL, .newLayout     = newL,
-        .image         = img.get(),
-        .subresourceRange = vk::ImageSubresourceRange{
-          .aspectMask     = vk::ImageAspectFlagBits::eColor,
-          .baseMipLevel   = baseMip,
-          .levelCount     = levelCount,
-          .baseArrayLayer = 0,
-          .layerCount     = LAYERS,
-        },
+        .srcStageMask = srcS,
+        .srcAccessMask = srcA,
+        .dstStageMask = dstS,
+        .dstAccessMask = dstA,
+        .oldLayout = oldL,
+        .newLayout = newL,
+        .image = img.get(),
+        .subresourceRange =
+          vk::ImageSubresourceRange{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = baseMip,
+            .levelCount = levelCount,
+            .baseArrayLayer = 0,
+            .layerCount = LAYERS,
+          },
       };
-      cmdBuf.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers    = &b,
-      });
+      cmdBuf.pipelineBarrier2(
+        vk::DependencyInfo{
+          .imageMemoryBarrierCount = 1,
+          .pImageMemoryBarriers = &b,
+        });
     };
 
-    barrierMip(0, 1,
-      vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
-      vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead,
-      vk::PipelineStageFlagBits2::eBlit,       vk::AccessFlagBits2::eTransferRead);
+    barrierMip(
+      0,
+      1,
+      vk::ImageLayout::eShaderReadOnlyOptimal,
+      vk::ImageLayout::eTransferSrcOptimal,
+      vk::PipelineStageFlagBits2::eAllCommands,
+      vk::AccessFlagBits2::eShaderRead,
+      vk::PipelineStageFlagBits2::eBlit,
+      vk::AccessFlagBits2::eTransferRead);
 
     int srcW = 1024, srcH = 1024;
     for (uint32_t m = 1; m < MIPS; ++m)
@@ -623,46 +672,67 @@ void WorldRenderer::loadDetailTextures()
       const int dstW = std::max(srcW / 2, 1);
       const int dstH = std::max(srcH / 2, 1);
 
-      barrierMip(m, 1,
-        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-        vk::PipelineStageFlagBits2::eNone, vk::AccessFlagBits2::eNone,
-        vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite);
+      barrierMip(
+        m,
+        1,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::PipelineStageFlagBits2::eNone,
+        vk::AccessFlagBits2::eNone,
+        vk::PipelineStageFlagBits2::eBlit,
+        vk::AccessFlagBits2::eTransferWrite);
 
       vk::ImageBlit blit{
-        .srcSubresource = vk::ImageSubresourceLayers{
-          .aspectMask     = vk::ImageAspectFlagBits::eColor,
-          .mipLevel       = m - 1,
-          .baseArrayLayer = 0,
-          .layerCount     = LAYERS,
-        },
+        .srcSubresource =
+          vk::ImageSubresourceLayers{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = m - 1,
+            .baseArrayLayer = 0,
+            .layerCount = LAYERS,
+          },
         .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{srcW, srcH, 1}},
-        .dstSubresource = vk::ImageSubresourceLayers{
-          .aspectMask     = vk::ImageAspectFlagBits::eColor,
-          .mipLevel       = m,
-          .baseArrayLayer = 0,
-          .layerCount     = LAYERS,
-        },
+        .dstSubresource =
+          vk::ImageSubresourceLayers{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .mipLevel = m,
+            .baseArrayLayer = 0,
+            .layerCount = LAYERS,
+          },
         .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
       };
       cmdBuf.blitImage(
-        img.get(), vk::ImageLayout::eTransferSrcOptimal,
-        img.get(), vk::ImageLayout::eTransferDstOptimal,
-        1, &blit, vk::Filter::eLinear);
+        img.get(),
+        vk::ImageLayout::eTransferSrcOptimal,
+        img.get(),
+        vk::ImageLayout::eTransferDstOptimal,
+        1,
+        &blit,
+        vk::Filter::eLinear);
 
       // Mip m: TransferDst -> TransferSrc (ready as source for next iteration)
-      barrierMip(m, 1,
-        vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
-        vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite,
-        vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
+      barrierMip(
+        m,
+        1,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eTransferSrcOptimal,
+        vk::PipelineStageFlagBits2::eBlit,
+        vk::AccessFlagBits2::eTransferWrite,
+        vk::PipelineStageFlagBits2::eBlit,
+        vk::AccessFlagBits2::eTransferRead);
 
       srcW = dstW;
       srcH = dstH;
     }
 
-    barrierMip(0, MIPS,
-      vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
-      vk::PipelineStageFlagBits2::eBlit,        vk::AccessFlagBits2::eTransferRead,
-      vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead);
+    barrierMip(
+      0,
+      MIPS,
+      vk::ImageLayout::eTransferSrcOptimal,
+      vk::ImageLayout::eShaderReadOnlyOptimal,
+      vk::PipelineStageFlagBits2::eBlit,
+      vk::AccessFlagBits2::eTransferRead,
+      vk::PipelineStageFlagBits2::eAllCommands,
+      vk::AccessFlagBits2::eShaderRead);
 
     ETNA_CHECK_VK_RESULT(cmdBuf.end());
     oneShot->submitAndWait(std::move(cmdBuf));
@@ -684,8 +754,9 @@ void WorldRenderer::saveSettings(const std::filesystem::path& path) const
   f << "# terrain_2 settings\n";
 
 #define SAVE_SCALAR(field) f << #field << " " << (field) << "\n"
-#define SAVE_BOOL(field)   f << #field << " " << ((field) ? 1 : 0) << "\n"
-#define SAVE_VEC3(field)   f << #field << " " << (field).x << " " << (field).y << " " << (field).z << "\n"
+#define SAVE_BOOL(field) f << #field << " " << ((field) ? 1 : 0) << "\n"
+#define SAVE_VEC3(field)                                                                           \
+  f << #field << " " << (field).x << " " << (field).y << " " << (field).z << "\n"
 
   // Terrain shape
   SAVE_SCALAR(terrainHeightScale);
@@ -727,9 +798,24 @@ void WorldRenderer::saveSettings(const std::filesystem::path& path) const
   SAVE_VEC3(sunColor);
   SAVE_SCALAR(sunIntensity);
 
-  // Shadows 
+  // Shadows
   SAVE_BOOL(enableShadows);
   SAVE_SCALAR(shadowOrthoHalfSize);
+
+  // Volumetric fog
+  SAVE_BOOL(fogEnabled);
+  SAVE_SCALAR(fogDensity);
+  SAVE_SCALAR(fogHeightFalloff);
+  SAVE_SCALAR(fogGroundLevel);
+  SAVE_SCALAR(fogScatterCoef);
+  SAVE_SCALAR(fogExtinctionCoef);
+  SAVE_SCALAR(fogPhaseG);
+  SAVE_SCALAR(fogSteps);
+  SAVE_SCALAR(fogMaxDistance);
+  SAVE_SCALAR(fogNoiseScale);
+  SAVE_SCALAR(fogNoiseStrength);
+  f << "fogWindDir " << fogWindDir.x << " " << fogWindDir.y << "\n";
+  SAVE_SCALAR(fogWindSpeed);
 
   // Tonemap / exposure
   SAVE_SCALAR(tonemapMode);
@@ -760,16 +846,27 @@ void WorldRenderer::loadSettings(const std::filesystem::path& path)
   std::string line;
   while (std::getline(f, line))
   {
-    if (line.empty() || line[0] == '#') continue;
+    if (line.empty() || line[0] == '#')
+      continue;
     std::istringstream iss(line);
     std::string key;
-    if (!(iss >> key)) continue;
+    if (!(iss >> key))
+      continue;
 
 #define LOAD_SCALAR(field) else if (key == #field) iss >> field
-#define LOAD_BOOL(field)   else if (key == #field) do { int _v = 0; iss >> _v; field = (_v != 0); } while (0)
-#define LOAD_VEC3(field)   else if (key == #field) iss >> field.x >> field.y >> field.z
+#define LOAD_BOOL(field)                                                                           \
+  else if (key == #field) do                                                                       \
+  {                                                                                                \
+    int _v = 0;                                                                                    \
+    iss >> _v;                                                                                     \
+    field = (_v != 0);                                                                             \
+  }                                                                                                \
+  while (0)
+#define LOAD_VEC3(field) else if (key == #field) iss >> field.x >> field.y >> field.z
 
-    if (false) {}
+    if (false)
+    {
+    }
     LOAD_SCALAR(terrainHeightScale);
     LOAD_SCALAR(terrainHillsWeight);
     LOAD_SCALAR(terrainRidgesWeight);
@@ -802,6 +899,19 @@ void WorldRenderer::loadSettings(const std::filesystem::path& path)
     LOAD_SCALAR(sunIntensity);
     LOAD_BOOL(enableShadows);
     LOAD_SCALAR(shadowOrthoHalfSize);
+    LOAD_BOOL(fogEnabled);
+    LOAD_SCALAR(fogDensity);
+    LOAD_SCALAR(fogHeightFalloff);
+    LOAD_SCALAR(fogGroundLevel);
+    LOAD_SCALAR(fogScatterCoef);
+    LOAD_SCALAR(fogExtinctionCoef);
+    LOAD_SCALAR(fogPhaseG);
+    LOAD_SCALAR(fogSteps);
+    LOAD_SCALAR(fogMaxDistance);
+    LOAD_SCALAR(fogNoiseScale);
+    LOAD_SCALAR(fogNoiseStrength);
+    else if (key == "fogWindDir") iss >> fogWindDir.x >> fogWindDir.y;
+    LOAD_SCALAR(fogWindSpeed);
     LOAD_SCALAR(tonemapMode);
     LOAD_SCALAR(adaptationSpeed);
     LOAD_SCALAR(keyValue);
@@ -865,6 +975,7 @@ void WorldRenderer::loadShaders()
     "clipmap_splat", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "clipmap_splat.comp.spv"});
   etna::create_program(
     "detail_gen", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "detail_gen.comp.spv"});
+  etna::create_program("fog", {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "fog.comp.spv"});
   etna::create_program(
     "terrain_render",
     {BINDLESS_AND_PBR_RENDERER_SHADERS_ROOT "quad.vert.spv",
@@ -915,89 +1026,94 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
   minmaxPipeline = pipelineManager.createComputePipeline("minmax", {});
   histogramPipeline = pipelineManager.createComputePipeline("histogram", {});
   reducePipeline = pipelineManager.createComputePipeline("reduce", {});
-  cullCountPipeline  = pipelineManager.createComputePipeline("cull_count", {});
-  prefixSumPipeline  = pipelineManager.createComputePipeline("prefix_sum", {});
-  cullWritePipeline  = pipelineManager.createComputePipeline("cull_write", {});
-  perlinPipeline     = pipelineManager.createComputePipeline("perlin", {});
-  normalPipeline     = pipelineManager.createComputePipeline("normal", {});
+  cullCountPipeline = pipelineManager.createComputePipeline("cull_count", {});
+  prefixSumPipeline = pipelineManager.createComputePipeline("prefix_sum", {});
+  cullWritePipeline = pipelineManager.createComputePipeline("cull_write", {});
+  perlinPipeline = pipelineManager.createComputePipeline("perlin", {});
+  normalPipeline = pipelineManager.createComputePipeline("normal", {});
   clipmapFillPipeline = pipelineManager.createComputePipeline("clipmap_fill", {});
   clipmapSplatPipeline = pipelineManager.createComputePipeline("clipmap_splat", {});
-  detailGenPipeline    = pipelineManager.createComputePipeline("detail_gen", {});
+  detailGenPipeline = pipelineManager.createComputePipeline("detail_gen", {});
+  fogPipeline = pipelineManager.createComputePipeline("fog", {});
 
-  clipmapTerrainPipeline = pipelineManager.createGraphicsPipeline(
-    "clipmap_terrain",
-    etna::GraphicsPipeline::CreateInfo{
-      .vertexShaderInput =
-        etna::VertexShaderInputDescription{
-          .bindings = {etna::VertexShaderInputDescription::Binding{
-            .byteStreamDescription =
-              etna::VertexByteStreamFormatDescription{
-                .stride     = sizeof(glm::vec2),
-                .attributes = {etna::VertexByteStreamFormatDescription::Attribute{
-                  .format = vk::Format::eR32G32Sfloat,
-                  .offset = 0,
-                }},
-              },
-          }},
-        },
-      .rasterizationConfig =
-        vk::PipelineRasterizationStateCreateInfo{
-          .polygonMode = vk::PolygonMode::eFill,
-          .cullMode = vk::CullModeFlagBits::eBack,
-          .frontFace = vk::FrontFace::eCounterClockwise,
-          .lineWidth = 1.f,
-        },
-      .fragmentShaderOutput =
-        {
-          .colorAttachmentFormats = {vk::Format::eB10G11R11UfloatPack32},
-          .depthAttachmentFormat = vk::Format::eD32Sfloat,
-        },
-    });
+  clipmapTerrainPipeline =
+    pipelineManager
+      .createGraphicsPipeline(
+        "clipmap_terrain",
+        etna::GraphicsPipeline::CreateInfo{
+          .vertexShaderInput =
+            etna::VertexShaderInputDescription{
+              .bindings = {etna::VertexShaderInputDescription::Binding{
+                .byteStreamDescription =
+                  etna::VertexByteStreamFormatDescription{
+                    .stride = sizeof(glm::vec2),
+                    .attributes = {etna::VertexByteStreamFormatDescription::Attribute{
+                      .format = vk::Format::eR32G32Sfloat,
+                      .offset = 0,
+                    }},
+                  },
+              }},
+            },
+          .rasterizationConfig =
+            vk::PipelineRasterizationStateCreateInfo{
+              .polygonMode = vk::PolygonMode::eFill,
+              .cullMode = vk::CullModeFlagBits::eBack,
+              .frontFace = vk::FrontFace::eCounterClockwise,
+              .lineWidth = 1.f,
+            },
+          .fragmentShaderOutput =
+            {
+              .colorAttachmentFormats = {vk::Format::eB10G11R11UfloatPack32},
+              .depthAttachmentFormat = vk::Format::eD32Sfloat,
+            },
+        });
 
   // Depth-only pipeline для shadow pass'а. Vertex input идентичен color path,
   // но: нет color attachments, включён pipeline-level depth bias (борьба с
   // shadow acne на наклонных поверхностях). blendingConfig.attachments = {}
   // нужно явно — иначе etna выставит 1 attachment по умолчанию, что не
   // совпадёт с пустым colorAttachmentFormats.
-  terrainDepthPipeline = pipelineManager.createGraphicsPipeline(
-    "clipmap_terrain_depth",
-    etna::GraphicsPipeline::CreateInfo{
-      .vertexShaderInput =
-        etna::VertexShaderInputDescription{
-          .bindings = {etna::VertexShaderInputDescription::Binding{
-            .byteStreamDescription =
-              etna::VertexByteStreamFormatDescription{
-                .stride     = sizeof(glm::vec2),
-                .attributes = {etna::VertexByteStreamFormatDescription::Attribute{
-                  .format = vk::Format::eR32G32Sfloat,
-                  .offset = 0,
-                }},
-              },
-          }},
-        },
-      .rasterizationConfig =
-        vk::PipelineRasterizationStateCreateInfo{
-          .polygonMode = vk::PolygonMode::eFill,
-          .cullMode = vk::CullModeFlagBits::eBack,
-          .frontFace = vk::FrontFace::eCounterClockwise,
-          .depthBiasEnable = vk::True,
-          .depthBiasConstantFactor = 1.25f,
-          .depthBiasSlopeFactor = 1.75f,
-          .lineWidth = 1.f,
-        },
-      .blendingConfig =
-        {
-          .attachments = {},
-          .logicOpEnable  = false,
-          .logicOp = vk::LogicOp::eClear,
-          .blendConstants = {0.f, 0.f, 0.f, 0.f},
-        },
-      .fragmentShaderOutput =
-        {
-          .colorAttachmentFormats = {},
-          .depthAttachmentFormat  = vk::Format::eD32Sfloat,
-        },
-    });
+  terrainDepthPipeline =
+    pipelineManager
+      .createGraphicsPipeline(
+        "clipmap_terrain_depth",
+        etna::GraphicsPipeline::CreateInfo{
+          .vertexShaderInput =
+            etna::VertexShaderInputDescription{
+              .bindings = {etna::VertexShaderInputDescription::Binding{
+                .byteStreamDescription =
+                  etna::VertexByteStreamFormatDescription{
+                    .stride = sizeof(glm::vec2),
+                    .attributes = {etna::VertexByteStreamFormatDescription::Attribute{
+                      .format = vk::Format::eR32G32Sfloat,
+                      .offset = 0,
+                    }},
+                  },
+              }},
+            },
+          .rasterizationConfig =
+            vk::PipelineRasterizationStateCreateInfo{
+              .polygonMode = vk::PolygonMode::eFill,
+              .cullMode = vk::CullModeFlagBits::eBack,
+              .frontFace = vk::FrontFace::eCounterClockwise,
+              .depthBiasEnable = vk::True,
+              .depthBiasConstantFactor = 1.25f,
+              .depthBiasSlopeFactor = 1.75f,
+              .lineWidth = 1.f,
+            },
+          .blendingConfig =
+            {
+              .attachments = {},
+              .logicOpEnable = false,
+              .logicOp = vk::LogicOp::eClear,
+              .blendConstants = {0.f, 0.f, 0.f, 0.f},
+            },
+          .fragmentShaderOutput =
+            {
+              .colorAttachmentFormats = {},
+              .depthAttachmentFormat = vk::Format::eD32Sfloat,
+            },
+        });
 
   terrainPipeline = pipelineManager.createGraphicsPipeline(
     "terrain_render",
@@ -1044,14 +1160,14 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
     });
   shadowDebugQuad = std::make_unique<QuadRenderer>(QuadRenderer::CreateInfo{
     .format = swapchain_format,
-    .rect   = {{0, 0}, {256, 256}},
+    .rect = {{0, 0}, {256, 256}},
   });
 }
 
 void WorldRenderer::updateCascades(const FramePacket& packet)
 {
-  const float nearClip  = findZNear();
-  const float farClip   = findZFar();
+  const float nearClip = findZNear();
+  const float farClip = findZFar();
   const float clipRange = farClip - nearClip;
   const float minZ = nearClip;
   const float maxZ = nearClip + clipRange;
@@ -1069,7 +1185,7 @@ void WorldRenderer::updateCascades(const FramePacket& packet)
   }
 
   const float aspect = static_cast<float>(resolution.x) / static_cast<float>(resolution.y);
-  const glm::mat4 invCam  = glm::inverse(packet.mainCam.projTm(aspect) * packet.mainCam.viewTm());
+  const glm::mat4 invCam = glm::inverse(packet.mainCam.projTm(aspect) * packet.mainCam.viewTm());
   const glm::vec3 lightDir = glm::normalize(sunDirection);
 
   float lastSplitDist = 0.0f;
@@ -1077,11 +1193,15 @@ void WorldRenderer::updateCascades(const FramePacket& packet)
   {
     const float splitDist = splits[i];
 
-      glm::vec3 corners[8] = {
-      glm::vec3(-1.f,  1.f, 0.f), glm::vec3( 1.f,  1.f, 0.f),
-      glm::vec3( 1.f, -1.f, 0.f), glm::vec3(-1.f, -1.f, 0.f),
-      glm::vec3(-1.f,  1.f, 1.f), glm::vec3( 1.f,  1.f, 1.f),
-      glm::vec3( 1.f, -1.f, 1.f), glm::vec3(-1.f, -1.f, 1.f),
+    glm::vec3 corners[8] = {
+      glm::vec3(-1.f, 1.f, 0.f),
+      glm::vec3(1.f, 1.f, 0.f),
+      glm::vec3(1.f, -1.f, 0.f),
+      glm::vec3(-1.f, -1.f, 0.f),
+      glm::vec3(-1.f, 1.f, 1.f),
+      glm::vec3(1.f, 1.f, 1.f),
+      glm::vec3(1.f, -1.f, 1.f),
+      glm::vec3(-1.f, -1.f, 1.f),
     };
     for (uint32_t j = 0; j < 8; ++j)
     {
@@ -1097,7 +1217,8 @@ void WorldRenderer::updateCascades(const FramePacket& packet)
     }
 
     glm::vec3 center{0.0f};
-    for (uint32_t j = 0; j < 8; ++j) center += corners[j];
+    for (uint32_t j = 0; j < 8; ++j)
+      center += corners[j];
     center /= 8.0f;
 
     float radius = 0.0f;
@@ -1110,8 +1231,8 @@ void WorldRenderer::updateCascades(const FramePacket& packet)
 
     const glm::vec3 lightEye = center - lightDir * (-minExt.z);
     const glm::mat4 lightView = glm::lookAtLH(lightEye, center, glm::vec3(0.f, 1.f, 0.f));
-    const glm::mat4 lightProj = glm::orthoLH_ZO(
-      minExt.x, maxExt.x, minExt.y, maxExt.y, 0.f, maxExt.z - minExt.z);
+    const glm::mat4 lightProj =
+      glm::orthoLH_ZO(minExt.x, maxExt.x, minExt.y, maxExt.y, 0.f, maxExt.z - minExt.z);
 
     cascadeViewProj[i] = lightProj * lightView;
     cascadeSplitDepths[i] = nearClip + splitDist * clipRange; // positive view-space Z (LH)
@@ -1127,9 +1248,13 @@ void WorldRenderer::updateCascades(const FramePacket& packet)
       const glm::vec4 origin = cascadeViewProj[i] * glm::vec4(0.f, 0.f, 0.f, 1.f);
       spdlog::info(
         "Cascade {}: split={:.1f} det={:.3e} worldOriginClip=({:.2f}, {:.2f}, {:.2f}, {:.2f})",
-        i, cascadeSplitDepths[i],
+        i,
+        cascadeSplitDepths[i],
         glm::determinant(cascadeViewProj[i]),
-        origin.x, origin.y, origin.z, origin.w);
+        origin.x,
+        origin.y,
+        origin.z,
+        origin.w);
     }
   }
 }
@@ -1150,22 +1275,20 @@ void WorldRenderer::update(const FramePacket& packet)
 
     const glm::vec3 target = glm::vec3(cameraWorldPos.x, 0.f, cameraWorldPos.z);
 
-    const float boxHalf  = shadowOrthoHalfSize;
+    const float boxHalf = shadowOrthoHalfSize;
     const float boxDepth = std::max(2000.f, terrainHeightScale * 5.f);
 
     const glm::vec3 lightEye = target + lightDir * (boxDepth * 0.5f);
     const glm::mat4 lightView = glm::lookAtLH(lightEye, target, glm::vec3(0, 1, 0));
-    const glm::mat4 lightProj = glm::orthoLH_ZO(
-      -boxHalf, +boxHalf, -boxHalf, +boxHalf, 0.f, boxDepth);
+    const glm::mat4 lightProj =
+      glm::orthoLH_ZO(-boxHalf, +boxHalf, -boxHalf, +boxHalf, 0.f, boxDepth);
 
     lightViewProj = lightProj * lightView;
 
     const glm::vec4 worldOriginClip = lightViewProj * glm::vec4(0, 0, 0, 1);
-    const glm::vec2 shadowTexels    = glm::vec2(worldOriginClip)
-                                    * (float(SHADOWMAP_DIM) * 0.5f);
-    const glm::vec2 rounded         = glm::round(shadowTexels);
-    const glm::vec2 fracOffset      = (rounded - shadowTexels)
-                                    * (2.f / float(SHADOWMAP_DIM));
+    const glm::vec2 shadowTexels = glm::vec2(worldOriginClip) * (float(SHADOWMAP_DIM) * 0.5f);
+    const glm::vec2 rounded = glm::round(shadowTexels);
+    const glm::vec2 fracOffset = (rounded - shadowTexels) * (2.f / float(SHADOWMAP_DIM));
 
     lightViewProj[3][0] += fracOffset.x;
     lightViewProj[3][1] += fracOffset.y;
@@ -1178,6 +1301,8 @@ void WorldRenderer::update(const FramePacket& packet)
   else
     deltaTime = std::max(packet.currentTime - previousTime, 0.f);
   previousTime = packet.currentTime;
+
+  timeSec = packet.currentTime; // для анимации тумана ветром
 }
 
 void WorldRenderer::performFrustumCulling(const glm::mat4x4& proj_view)
@@ -1580,7 +1705,7 @@ void WorldRenderer::renderWorld(
 
   if (selectedScene == SceneType::Terrain && useClipmapTerrain)
   {
-    updateClipmapLevels();              
+    updateClipmapLevels();
     updateClipmapHeightmaps(cmd_buf);
     if (liveLevelsCount < CLIPMAP_LEVELS)
       updateClipmapAlbedos(cmd_buf);
@@ -1656,6 +1781,25 @@ void WorldRenderer::renderWorld(
     vk::ImageLayout::eShaderReadOnlyOptimal,
     vk::ImageAspectFlagBits::eColor);
   etna::flush_barriers(cmd_buf);
+
+  // Volumetric fog
+  const bool fogActive =
+    fogEnabled && enableShadows && selectedScene == SceneType::Terrain && useClipmapTerrain;
+  if (fogActive)
+  {
+    renderFogPass(cmd_buf);
+  }
+  else
+  {
+    etna::set_state(
+      cmd_buf,
+      fogTarget.get(),
+      vk::PipelineStageFlagBits2::eFragmentShader,
+      vk::AccessFlagBits2::eShaderSampledRead,
+      vk::ImageLayout::eShaderReadOnlyOptimal,
+      vk::ImageAspectFlagBits::eColor);
+    etna::flush_barriers(cmd_buf);
+  }
 
   // Clear per-frame stats (histogram zeros + min/max seeds)
   {
@@ -1813,27 +1957,34 @@ void WorldRenderer::renderWorld(
     auto hdrBinding =
       hdrTarget.genBinding(hdrSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
     auto statsBinding = luminanceStatsBuffer.genBinding();
+    auto fogBinding =
+      fogTarget.genBinding(fogSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
     auto descSet = etna::create_descriptor_set(
       programInfo.getDescriptorLayoutId(0),
       cmd_buf,
-      {etna::Binding{0, hdrBinding}, etna::Binding{1, statsBinding}});
+      {etna::Binding{0, hdrBinding}, etna::Binding{1, statsBinding}, etna::Binding{2, fogBinding}});
 
     vk::DescriptorSet vkSet = descSet.getVkSet();
     const auto layout = postprocessPipeline.getVkPipelineLayout();
     cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, postprocessPipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
 
-    const std::uint32_t tonemapModeU = static_cast<std::uint32_t>(tonemapMode);
-    cmd_buf.pushConstants<std::uint32_t>(
-      layout, vk::ShaderStageFlagBits::eFragment, 0, {tonemapModeU});
+    struct PostPC
+    {
+      std::uint32_t tonemapMode;
+      std::uint32_t fogEnabled;
+    } postPc{
+      static_cast<std::uint32_t>(tonemapMode),
+      fogActive ? 1u : 0u,
+    };
+    cmd_buf.pushConstants<PostPC>(layout, vk::ShaderStageFlagBits::eFragment, 0, {postPc});
 
     cmd_buf.draw(3, 1, 0, 0);
   }
 
   if (drawShadowMapOverlay && shadowDebugQuad && enableShadows)
   {
-    shadowDebugQuad->render(
-      cmd_buf, target_image, target_image_view, shadowMap, perlinSampler);
+    shadowDebugQuad->render(cmd_buf, target_image, target_image_view, shadowMap, perlinSampler);
   }
 }
 
@@ -1868,7 +2019,11 @@ void WorldRenderer::createTerrainMap(vk::CommandBuffer cmd_buf)
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       perlinPipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
+      0,
+      1,
+      &vkSet,
+      0,
+      nullptr);
     etna::flush_barriers(cmd_buf);
     cmd_buf.dispatch(4096 / 32, 4096 / 32, 1);
   }
@@ -1888,16 +2043,18 @@ void WorldRenderer::createTerrainMap(vk::CommandBuffer cmd_buf)
       vk::ImageAspectFlagBits::eColor);
 
     auto set = etna::create_descriptor_set(
-      info.getDescriptorLayoutId(0),
-      cmd_buf,
-      {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
+      info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
     vk::DescriptorSet vkSet = set.getVkSet();
 
     cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, normalPipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       normalPipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
+      0,
+      1,
+      &vkSet,
+      0,
+      nullptr);
     etna::flush_barriers(cmd_buf);
     cmd_buf.dispatch(4096 / 32, 4096 / 32, 1);
   }
@@ -1928,15 +2085,12 @@ void WorldRenderer::renderTerrain(vk::CommandBuffer cmd_buf)
   auto bind1 = normalMap.genBinding(perlinSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
 
   auto descSet = etna::create_descriptor_set(
-    info.getDescriptorLayoutId(0),
-    cmd_buf,
-    {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
+    info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind0}, etna::Binding{1, bind1}});
   auto vkSet = descSet.getVkSet();
   auto layout = terrainPipeline.getVkPipelineLayout();
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, terrainPipeline.getVkPipeline());
-  cmd_buf.bindDescriptorSets(
-    vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+  cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
 
   TerrainPushConst pc{
     worldViewProj,
@@ -1946,9 +2100,8 @@ void WorldRenderer::renderTerrain(vk::CommandBuffer cmd_buf)
   };
   cmd_buf.pushConstants<TerrainPushConst>(
     layout,
-    vk::ShaderStageFlagBits::eTessellationControl
-      | vk::ShaderStageFlagBits::eTessellationEvaluation
-      | vk::ShaderStageFlagBits::eFragment,
+    vk::ShaderStageFlagBits::eTessellationControl |
+      vk::ShaderStageFlagBits::eTessellationEvaluation | vk::ShaderStageFlagBits::eFragment,
     0,
     {pc});
 
@@ -1998,7 +2151,7 @@ void WorldRenderer::loadSceneByType(SceneType type)
     sceneMgr = std::make_unique<SceneManager>();
     sceneTextures.clear();
     sceneInstanceCount = 0;
-    sceneRelemCount    = 0;
+    sceneRelemCount = 0;
     initTerrainIfNeeded();
     return;
   }
@@ -2020,8 +2173,9 @@ void WorldRenderer::drawGui()
   ImGui::SameLine();
   ImGui::TextDisabled("(?)");
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Reads/writes terrain_settings.txt in the working directory.\n"
-                      "The file is auto-loaded at startup if present.");
+    ImGui::SetTooltip(
+      "Reads/writes terrain_settings.txt in the working directory.\n"
+      "The file is auto-loaded at startup if present.");
   ImGui::Separator();
 
   if (ImGui::InputFloat("ImGui scale", &imguiScale, 0.1f, 0.5f, "%.1f"))
@@ -2037,7 +2191,8 @@ void WorldRenderer::drawGui()
 
   bool bakedChanged = ImGui::Checkbox("Use baked scene", &bakedEnabled);
 
-  const char* scenes[] = {"SimpleMeshes", "Low Poly Dark Town", "Lovely Town", "Avocado", "Terrain"};
+  const char* scenes[] = {
+    "SimpleMeshes", "Low Poly Dark Town", "Lovely Town", "Avocado", "Terrain"};
   int currentSceneIdx = static_cast<int>(selectedScene);
 
   bool sceneChanged = ImGui::Combo("Scene", &currentSceneIdx, scenes, IM_ARRAYSIZE(scenes));
@@ -2061,10 +2216,10 @@ void WorldRenderer::drawGui()
 
       if (ImGui::CollapsingHeader("Terrain shape"))
       {
-        ImGui::SliderFloat("Height scale (m)",    &terrainHeightScale,    10.f,  800.f, "%.0f");
-        ImGui::SliderFloat("Hills weight",        &terrainHillsWeight,     0.f,    3.f, "%.2f");
-        ImGui::SliderFloat("Ridges weight",       &terrainRidgesWeight,    0.f,    3.f, "%.2f");
-        ImGui::SliderFloat("Detail amplitude",    &terrainDetailAmplitude, 0.f,   0.1f, "%.3f");
+        ImGui::SliderFloat("Height scale (m)", &terrainHeightScale, 10.f, 800.f, "%.0f");
+        ImGui::SliderFloat("Hills weight", &terrainHillsWeight, 0.f, 3.f, "%.2f");
+        ImGui::SliderFloat("Ridges weight", &terrainRidgesWeight, 0.f, 3.f, "%.2f");
+        ImGui::SliderFloat("Detail amplitude", &terrainDetailAmplitude, 0.f, 0.1f, "%.3f");
       }
 
       if (ImGui::CollapsingHeader("fBm"))
@@ -2072,30 +2227,29 @@ void WorldRenderer::drawGui()
         float period = terrainBaseFreq > 1e-7f ? 1.0f / terrainBaseFreq : 1024.f;
         if (ImGui::SliderFloat("Base period (m)", &period, 64.f, 8192.f, "%.0f"))
           terrainBaseFreq = 1.0f / period;
-        ImGui::SliderInt  ("Octaves",           &terrainOctaves,       1,    8);
-        ImGui::SliderFloat("Persistence",       &terrainPersistence,   0.1f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Lacunarity",        &terrainLacunarity,    1.2f, 3.0f, "%.2f");
+        ImGui::SliderInt("Octaves", &terrainOctaves, 1, 8);
+        ImGui::SliderFloat("Persistence", &terrainPersistence, 0.1f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Lacunarity", &terrainLacunarity, 1.2f, 3.0f, "%.2f");
       }
 
       if (ImGui::CollapsingHeader("Shaping"))
       {
-        ImGui::SliderFloat("Bias power",        &terrainBiasPower,     0.2f, 4.0f, "%.2f");
-        ImGui::SliderFloat("Ocean cut",         &terrainOceanCut,      0.0f, 0.6f, "%.2f");
+        ImGui::SliderFloat("Bias power", &terrainBiasPower, 0.2f, 4.0f, "%.2f");
+        ImGui::SliderFloat("Ocean cut", &terrainOceanCut, 0.0f, 0.6f, "%.2f");
       }
 
       if (ImGui::CollapsingHeader("Mountain mask"))
       {
-        float maskPeriod = terrainMountainMaskFreq > 1e-7f
-          ? 1.0f / terrainMountainMaskFreq : 0.f;
+        float maskPeriod = terrainMountainMaskFreq > 1e-7f ? 1.0f / terrainMountainMaskFreq : 0.f;
         if (ImGui::SliderFloat("Mask period (m)", &maskPeriod, 512.f, 16384.f, "%.0f"))
           terrainMountainMaskFreq = maskPeriod > 0.f ? 1.0f / maskPeriod : terrainMountainMaskFreq;
-        ImGui::SliderFloat("Mask offset",       &terrainMountainMaskOffset, -1.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Mask width",        &terrainMountainMaskWidth,   0.05f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Mask offset", &terrainMountainMaskOffset, -1.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Mask width", &terrainMountainMaskWidth, 0.05f, 1.0f, "%.2f");
       }
 
       if (ImGui::CollapsingHeader("Domain warp"))
       {
-        ImGui::SliderFloat("Warp amplitude (m)", &terrainWarpAmp,      0.f,  400.f, "%.0f");
+        ImGui::SliderFloat("Warp amplitude (m)", &terrainWarpAmp, 0.f, 400.f, "%.0f");
         float warpPeriod = terrainWarpFreq > 1e-7f ? 1.0f / terrainWarpFreq : 0.f;
         if (ImGui::SliderFloat("Warp period (m)", &warpPeriod, 64.f, 4096.f, "%.0f"))
           terrainWarpFreq = warpPeriod > 0.f ? 1.0f / warpPeriod : terrainWarpFreq;
@@ -2103,7 +2257,7 @@ void WorldRenderer::drawGui()
 
       if (ImGui::CollapsingHeader("Ridged multifractal"))
       {
-        ImGui::SliderFloat("Ridge sharpness",   &terrainRidgedSharpness, 1.0f, 6.0f, "%.1f");
+        ImGui::SliderFloat("Ridge sharpness", &terrainRidgedSharpness, 1.0f, 6.0f, "%.1f");
       }
 
       if (ImGui::CollapsingHeader("Splatting"))
@@ -2121,22 +2275,21 @@ void WorldRenderer::drawGui()
             "3 = balanced (default): innermost 3 rings sharp, rest cached.",
             CLIPMAP_LEVELS);
 
-        ImGui::SliderFloat("Ground-Grass height", &terrainHeightLow,      -50.f, 100.f, "%.1f");
-        ImGui::SliderFloat("Grass-Snow height",  &terrainHeightHigh,      0.f,  150.f, "%.1f");
-        ImGui::SliderFloat("Blend sharpness",    &terrainBlendSharpness,  0.5f, 40.f,  "%.1f");
-        ImGui::SliderFloat("Rock slope",         &terrainSlopeThreshold,  0.0f, 1.0f,  "%.2f");
+        ImGui::SliderFloat("Ground-Grass height", &terrainHeightLow, -50.f, 100.f, "%.1f");
+        ImGui::SliderFloat("Grass-Snow height", &terrainHeightHigh, 0.f, 150.f, "%.1f");
+        ImGui::SliderFloat("Blend sharpness", &terrainBlendSharpness, 0.5f, 40.f, "%.1f");
+        ImGui::SliderFloat("Rock slope", &terrainSlopeThreshold, 0.0f, 1.0f, "%.2f");
       }
 
       if (ImGui::CollapsingHeader("Detail textures"))
       {
-        ImGui::SliderFloat("Tile period (m)",  &detailTilePeriod,     2.f,  256.f, "%.0f");
-        ImGui::SliderFloat("Normal strength",  &detailNormalStrength, 0.f,    2.f, "%.2f");
+        ImGui::SliderFloat("Tile period (m)", &detailTilePeriod, 2.f, 256.f, "%.0f");
+        ImGui::SliderFloat("Normal strength", &detailNormalStrength, 0.f, 2.f, "%.2f");
       }
     }
   }
 
-  const char* debugModes[] = {
-    "Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
+  const char* debugModes[] = {"Shaded", "BaseColor", "Normal (raw)", "MetalRough", "Occlusion"};
   ImGui::Combo("Debug view", &debugMode, debugModes, IM_ARRAYSIZE(debugModes));
 
   if (ImGui::CollapsingHeader("Shadows"))
@@ -2144,6 +2297,25 @@ void WorldRenderer::drawGui()
     ImGui::Checkbox("Enable shadows", &enableShadows);
     ImGui::SliderFloat("Ortho half size (m)", &shadowOrthoHalfSize, 200.f, 2000.f, "%.0f");
     ImGui::Checkbox("Show shadow map overlay", &drawShadowMapOverlay);
+  }
+
+  if (ImGui::CollapsingHeader("Volumetric Fog"))
+  {
+    ImGui::Checkbox("Enable fog", &fogEnabled);
+    ImGui::TextDisabled("(требует Enable shadows + clipmap terrain)");
+    ImGui::SliderFloat("Density", &fogDensity, 0.0f, 0.2f, "%.4f");
+    ImGui::SliderFloat("Height falloff", &fogHeightFalloff, 1.0f, 500.f, "%.0f");
+    ImGui::SliderFloat("Ground level", &fogGroundLevel, -100.f, 400.f, "%.0f");
+    ImGui::SliderFloat("Scatter coef", &fogScatterCoef, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Extinction coef", &fogExtinctionCoef, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Phase g", &fogPhaseG, -0.9f, 0.9f, "%.2f");
+    ImGui::SliderInt("Steps (quality)", &fogSteps, 8, 128);
+    ImGui::SliderFloat("Max distance", &fogMaxDistance, 100.f, 5000.f, "%.0f");
+    ImGui::SliderFloat("Noise scale", &fogNoiseScale, 0.0005f, 0.05f, "%.4f");
+    ImGui::SliderFloat("Noise strength", &fogNoiseStrength, 0.0f, 1.0f, "%.2f");
+    ImGui::Separator();
+    ImGui::SliderFloat2("Wind dir", &fogWindDir.x, -1.f, 1.f, "%.2f");
+    ImGui::SliderFloat("Wind speed", &fogWindSpeed, 0.0f, 20.f, "%.1f");
   }
 
   if (ImGui::CollapsingHeader("Adaptive exposure"))
@@ -2196,25 +2368,27 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
 
   {
     vk::ImageMemoryBarrier2 toGeneral{
-      .srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands,
+      .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
       .srcAccessMask = {},
-      .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
       .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-      .oldLayout     = vk::ImageLayout::eUndefined,
-      .newLayout     = vk::ImageLayout::eGeneral,
-      .image         = detailTex.get(),
-      .subresourceRange = vk::ImageSubresourceRange{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .baseMipLevel   = 0,
-        .levelCount     = DETAIL_TEX_MIPS,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-      },
+      .oldLayout = vk::ImageLayout::eUndefined,
+      .newLayout = vk::ImageLayout::eGeneral,
+      .image = detailTex.get(),
+      .subresourceRange =
+        vk::ImageSubresourceRange{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel = 0,
+          .levelCount = DETAIL_TEX_MIPS,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+        },
     };
-    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers    = &toGeneral,
-    });
+    cmd_buf.pipelineBarrier2(
+      vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toGeneral,
+      });
   }
 
   {
@@ -2223,40 +2397,46 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
       perlinSampler.get(),
       vk::ImageLayout::eGeneral,
       etna::Image::ViewParams{.baseMip = 0, .levelCount = 1});
-    auto descSet = etna::create_descriptor_set(
-      info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind}});
+    auto descSet =
+      etna::create_descriptor_set(info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind}});
     vk::DescriptorSet vkSet = descSet.getVkSet();
 
     cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, detailGenPipeline.getVkPipeline());
     cmd_buf.bindDescriptorSets(
       vk::PipelineBindPoint::eCompute,
       detailGenPipeline.getVkPipelineLayout(),
-      0, 1, &vkSet, 0, nullptr);
+      0,
+      1,
+      &vkSet,
+      0,
+      nullptr);
     // 512 / 16 = 32 groups
     cmd_buf.dispatch(DETAIL_TEX_SIZE / 16, DETAIL_TEX_SIZE / 16, 1);
   }
 
   {
     vk::ImageMemoryBarrier2 b{
-      .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
       .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-      .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
       .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-      .oldLayout     = vk::ImageLayout::eGeneral,
-      .newLayout     = vk::ImageLayout::eGeneral,
-      .image         = detailTex.get(),
-      .subresourceRange = vk::ImageSubresourceRange{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .baseMipLevel   = 0,
-        .levelCount     = 1,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-      },
+      .oldLayout = vk::ImageLayout::eGeneral,
+      .newLayout = vk::ImageLayout::eGeneral,
+      .image = detailTex.get(),
+      .subresourceRange =
+        vk::ImageSubresourceRange{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel = 0,
+          .levelCount = 1,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+        },
     };
-    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers    = &b,
-    });
+    cmd_buf.pipelineBarrier2(
+      vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &b,
+      });
   }
 
   int srcW = static_cast<int>(DETAIL_TEX_SIZE);
@@ -2267,48 +2447,56 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
     const int dstH = std::max(srcH / 2, 1);
 
     vk::ImageBlit blit{
-      .srcSubresource = vk::ImageSubresourceLayers{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .mipLevel       = i - 1,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-      },
+      .srcSubresource =
+        vk::ImageSubresourceLayers{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .mipLevel = i - 1,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+        },
       .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{srcW, srcH, 1}},
-      .dstSubresource = vk::ImageSubresourceLayers{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .mipLevel       = i,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-      },
+      .dstSubresource =
+        vk::ImageSubresourceLayers{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .mipLevel = i,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+        },
       .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
     };
     cmd_buf.blitImage(
-      detailTex.get(), vk::ImageLayout::eGeneral,
-      detailTex.get(), vk::ImageLayout::eGeneral,
-      1, &blit, vk::Filter::eLinear);
+      detailTex.get(),
+      vk::ImageLayout::eGeneral,
+      detailTex.get(),
+      vk::ImageLayout::eGeneral,
+      1,
+      &blit,
+      vk::Filter::eLinear);
 
     if (i + 1 < DETAIL_TEX_MIPS)
     {
       vk::ImageMemoryBarrier2 b{
-        .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
         .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-        .oldLayout     = vk::ImageLayout::eGeneral,
-        .newLayout     = vk::ImageLayout::eGeneral,
-        .image         = detailTex.get(),
-        .subresourceRange = vk::ImageSubresourceRange{
-          .aspectMask     = vk::ImageAspectFlagBits::eColor,
-          .baseMipLevel   = i,
-          .levelCount     = 1,
-          .baseArrayLayer = 0,
-          .layerCount     = 1,
-        },
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = detailTex.get(),
+        .subresourceRange =
+          vk::ImageSubresourceRange{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = i,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+          },
       };
-      cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers    = &b,
-      });
+      cmd_buf.pipelineBarrier2(
+        vk::DependencyInfo{
+          .imageMemoryBarrierCount = 1,
+          .pImageMemoryBarriers = &b,
+        });
     }
 
     srcW = dstW;
@@ -2317,26 +2505,27 @@ void WorldRenderer::initDetailTexture(vk::CommandBuffer cmd_buf)
 
   {
     vk::ImageMemoryBarrier2 toReadOnly{
-      .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
       .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-      .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
       .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-      .oldLayout     = vk::ImageLayout::eGeneral,
-      .newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal,
-      .image         = detailTex.get(),
-      .subresourceRange = vk::ImageSubresourceRange
-      {
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .baseMipLevel   = 0,
-        .levelCount     = DETAIL_TEX_MIPS,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-      },
+      .oldLayout = vk::ImageLayout::eGeneral,
+      .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+      .image = detailTex.get(),
+      .subresourceRange =
+        vk::ImageSubresourceRange{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel = 0,
+          .levelCount = DETAIL_TEX_MIPS,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+        },
     };
-    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers    = &toReadOnly,
-    });
+    cmd_buf.pipelineBarrier2(
+      vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toReadOnly,
+      });
   }
 
   detailTexInitialized = true;
@@ -2362,25 +2551,25 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
 
   struct FillPC
   {
-    glm::vec2 levelOrigin;       // group 0
-    float     gridStep;
-    int32_t   levelIdx;
-    float     hillsWeight;       // group 1
-    float     ridgesWeight;
-    float     detailAmplitude;
-    float     biasPower;
-    float     oceanCut;          // group 2
-    float     mountainMaskFreq;
-    float     mountainMaskOffset;
-    float     mountainMaskWidth;
-    float     baseFreq;          // group 3
-    int32_t   octaves;
-    float     persistence;
-    float     lacunarity;
-    float     warpAmp;           // group 4
-    float     warpFreq;
-    float     ridgedSharpness;
-    float     _pad{0.f};
+    glm::vec2 levelOrigin; // group 0
+    float gridStep;
+    int32_t levelIdx;
+    float hillsWeight; // group 1
+    float ridgesWeight;
+    float detailAmplitude;
+    float biasPower;
+    float oceanCut; // group 2
+    float mountainMaskFreq;
+    float mountainMaskOffset;
+    float mountainMaskWidth;
+    float baseFreq; // group 3
+    int32_t octaves;
+    float persistence;
+    float lacunarity;
+    float warpAmp; // group 4
+    float warpFreq;
+    float ridgedSharpness;
+    float _pad{0.f};
   };
 
   auto fillInfo = etna::get_shader_program("clipmap_fill");
@@ -2392,7 +2581,8 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
     clipmapSampler.get(), // eRepeat addressMode for tile wrapping
     vk::ImageLayout::eShaderReadOnlyOptimal);
   auto fillSet = etna::create_descriptor_set(
-    fillInfo.getDescriptorLayoutId(0), cmd_buf,
+    fillInfo.getDescriptorLayoutId(0),
+    cmd_buf,
     {etna::Binding{0, fillBind}, etna::Binding{1, detailBind}});
   vk::DescriptorSet fillVkSet = fillSet.getVkSet();
 
@@ -2400,12 +2590,16 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eCompute,
     clipmapFillPipeline.getVkPipelineLayout(),
-    0, 1, &fillVkSet, 0, nullptr);
+    0,
+    1,
+    &fillVkSet,
+    0,
+    nullptr);
 
   for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
   {
-    const float step   = clipmapBaseStep * static_cast<float>(1 << level);
-    const float snap   = 2.f * step;
+    const float step = clipmapBaseStep * static_cast<float>(1 << level);
+    const float snap = 2.f * step;
     const glm::vec2 center = glm::floor(camXZ / snap) * snap;
     const glm::vec2 origin = center - halfGrid * step;
 
@@ -2431,8 +2625,7 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
       terrainRidgedSharpness,
     };
     cmd_buf.pushConstants<FillPC>(
-      clipmapFillPipeline.getVkPipelineLayout(),
-      vk::ShaderStageFlagBits::eCompute, 0, {pc});
+      clipmapFillPipeline.getVkPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, {pc});
 
     cmd_buf.dispatch(16, 16, 1);
   }
@@ -2452,7 +2645,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
   ETNA_PROFILE_GPU(cmd_buf, clipmapSplat);
 
   const float heightScale = terrainHeightScale;
-  const float halfGrid    = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
+  const float halfGrid = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
   const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
 
   etna::set_state(
@@ -2466,37 +2659,39 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
   etna::flush_barriers(cmd_buf);
   {
     vk::ImageMemoryBarrier2 toGeneral{
-      .srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands,
+      .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
       .srcAccessMask = {},
-      .dstStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
       .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-      .oldLayout     = vk::ImageLayout::eUndefined,
-      .newLayout     = vk::ImageLayout::eGeneral,
-      .image         = clipmapAlbedoArray.get(),
-      .subresourceRange = vk::ImageSubresourceRange{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .baseMipLevel   = 0,
-        .levelCount     = CLIPMAP_ALBEDO_MIPS,
-        .baseArrayLayer = 0,
-        .layerCount     = CLIPMAP_LEVELS,
-      },
+      .oldLayout = vk::ImageLayout::eUndefined,
+      .newLayout = vk::ImageLayout::eGeneral,
+      .image = clipmapAlbedoArray.get(),
+      .subresourceRange =
+        vk::ImageSubresourceRange{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel = 0,
+          .levelCount = CLIPMAP_ALBEDO_MIPS,
+          .baseArrayLayer = 0,
+          .layerCount = CLIPMAP_LEVELS,
+        },
     };
-    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers    = &toGeneral,
-    });
+    cmd_buf.pipelineBarrier2(
+      vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toGeneral,
+      });
   }
 
   struct SplatPC
   {
-    glm::vec2 levelOrigin;      
-    float     gridStep;         
-    int32_t   levelIdx;         
-    float     heightScale;      
-    float     detailTilePeriod;
-    uint32_t  _pad0;            
-    uint32_t  _pad1;            
-    glm::vec4 splatParams;     
+    glm::vec2 levelOrigin;
+    float gridStep;
+    int32_t levelIdx;
+    float heightScale;
+    float detailTilePeriod;
+    uint32_t _pad0;
+    uint32_t _pad1;
+    glm::vec4 splatParams;
   }; // 48
 
   auto info = etna::get_shader_program("clipmap_splat");
@@ -2509,9 +2704,9 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     clipmapSampler.get(),
     vk::ImageLayout::eGeneral,
     etna::Image::ViewParams{
-      .baseMip    = 0,
+      .baseMip = 0,
       .levelCount = 1,
-      .type       = vk::ImageViewType::e2DArray,
+      .type = vk::ImageViewType::e2DArray,
     });
   auto bindDC = detailColorArray.genBinding(
     detailSampler.get(),
@@ -2525,15 +2720,21 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, bindH}, etna::Binding{1, bindA},
-     etna::Binding{2, bindDC}, etna::Binding{3, bindDH}});
+    {etna::Binding{0, bindH},
+     etna::Binding{1, bindA},
+     etna::Binding{2, bindDC},
+     etna::Binding{3, bindDH}});
   vk::DescriptorSet vkSet = descSet.getVkSet();
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, clipmapSplatPipeline.getVkPipeline());
   cmd_buf.bindDescriptorSets(
     vk::PipelineBindPoint::eCompute,
     clipmapSplatPipeline.getVkPipelineLayout(),
-    0, 1, &vkSet, 0, nullptr);
+    0,
+    1,
+    &vkSet,
+    0,
+    nullptr);
 
   const glm::vec4 splatParams4{
     terrainHeightLow,
@@ -2554,33 +2755,33 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     const SplatPC pc{origin, step, instanceIdx, heightScale, detailTilePeriod, 0, 0, splatParams4};
 
     cmd_buf.pushConstants<SplatPC>(
-      clipmapSplatPipeline.getVkPipelineLayout(),
-      vk::ShaderStageFlagBits::eCompute, 0, {pc});
+      clipmapSplatPipeline.getVkPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, {pc});
     cmd_buf.dispatch(16, 16, 1);
   }
 
   {
     vk::ImageMemoryBarrier2 computeToBlit{
-      .srcStageMask  = vk::PipelineStageFlagBits2::eComputeShader,
+      .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
       .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-      .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
       .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-      .oldLayout     = vk::ImageLayout::eGeneral,
-      .newLayout     = vk::ImageLayout::eGeneral,
-      .image         = clipmapAlbedoArray.get(),
-      .subresourceRange = vk::ImageSubresourceRange
-      {
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .baseMipLevel   = 0,
-        .levelCount     = 1,
-        .baseArrayLayer = 0,
-        .layerCount     = CLIPMAP_LEVELS,
-      },
+      .oldLayout = vk::ImageLayout::eGeneral,
+      .newLayout = vk::ImageLayout::eGeneral,
+      .image = clipmapAlbedoArray.get(),
+      .subresourceRange =
+        vk::ImageSubresourceRange{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel = 0,
+          .levelCount = 1,
+          .baseArrayLayer = 0,
+          .layerCount = CLIPMAP_LEVELS,
+        },
     };
-    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers    = &computeToBlit,
-    });
+    cmd_buf.pipelineBarrier2(
+      vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &computeToBlit,
+      });
   }
 
   int srcW = 256, srcH = 256;
@@ -2590,48 +2791,56 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     const int dstH = std::max(srcH / 2, 1);
 
     vk::ImageBlit blit{
-      .srcSubresource = vk::ImageSubresourceLayers{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .mipLevel       = i - 1,
-        .baseArrayLayer = 0,
-        .layerCount     = CLIPMAP_LEVELS,
-      },
+      .srcSubresource =
+        vk::ImageSubresourceLayers{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .mipLevel = i - 1,
+          .baseArrayLayer = 0,
+          .layerCount = CLIPMAP_LEVELS,
+        },
       .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{srcW, srcH, 1}},
-      .dstSubresource = vk::ImageSubresourceLayers{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .mipLevel       = i,
-        .baseArrayLayer = 0,
-        .layerCount     = CLIPMAP_LEVELS,
-      },
+      .dstSubresource =
+        vk::ImageSubresourceLayers{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .mipLevel = i,
+          .baseArrayLayer = 0,
+          .layerCount = CLIPMAP_LEVELS,
+        },
       .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
     };
     cmd_buf.blitImage(
-      clipmapAlbedoArray.get(), vk::ImageLayout::eGeneral,
-      clipmapAlbedoArray.get(), vk::ImageLayout::eGeneral,
-      1, &blit, vk::Filter::eLinear);
+      clipmapAlbedoArray.get(),
+      vk::ImageLayout::eGeneral,
+      clipmapAlbedoArray.get(),
+      vk::ImageLayout::eGeneral,
+      1,
+      &blit,
+      vk::Filter::eLinear);
 
     if (i + 1 < CLIPMAP_ALBEDO_MIPS)
     {
       vk::ImageMemoryBarrier2 b{
-        .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask  = vk::PipelineStageFlagBits2::eBlit,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
         .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-        .oldLayout     = vk::ImageLayout::eGeneral,
-        .newLayout     = vk::ImageLayout::eGeneral,
-        .image         = clipmapAlbedoArray.get(),
-        .subresourceRange = vk::ImageSubresourceRange{
-          .aspectMask     = vk::ImageAspectFlagBits::eColor,
-          .baseMipLevel   = i,
-          .levelCount     = 1,
-          .baseArrayLayer = 0,
-          .layerCount     = CLIPMAP_LEVELS,
-        },
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = clipmapAlbedoArray.get(),
+        .subresourceRange =
+          vk::ImageSubresourceRange{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = i,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = CLIPMAP_LEVELS,
+          },
       };
-      cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers    = &b,
-      });
+      cmd_buf.pipelineBarrier2(
+        vk::DependencyInfo{
+          .imageMemoryBarrierCount = 1,
+          .pImageMemoryBarriers = &b,
+        });
     }
 
     srcW = dstW;
@@ -2641,25 +2850,27 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
   // All mips: eGeneral -> eShaderReadOnlyOptimal for fragment trilinear sampling.
   {
     vk::ImageMemoryBarrier2 toReadOnly{
-      .srcStageMask  = vk::PipelineStageFlagBits2::eBlit,
+      .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
       .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-      .dstStageMask  = vk::PipelineStageFlagBits2::eFragmentShader,
+      .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
       .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-      .oldLayout     = vk::ImageLayout::eGeneral,
-      .newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal,
-      .image         = clipmapAlbedoArray.get(),
-      .subresourceRange = vk::ImageSubresourceRange{
-        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-        .baseMipLevel   = 0,
-        .levelCount     = CLIPMAP_ALBEDO_MIPS,
-        .baseArrayLayer = 0,
-        .layerCount     = CLIPMAP_LEVELS,
-      },
+      .oldLayout = vk::ImageLayout::eGeneral,
+      .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+      .image = clipmapAlbedoArray.get(),
+      .subresourceRange =
+        vk::ImageSubresourceRange{
+          .aspectMask = vk::ImageAspectFlagBits::eColor,
+          .baseMipLevel = 0,
+          .levelCount = CLIPMAP_ALBEDO_MIPS,
+          .baseArrayLayer = 0,
+          .layerCount = CLIPMAP_LEVELS,
+        },
     };
-    cmd_buf.pipelineBarrier2(vk::DependencyInfo{
-      .imageMemoryBarrierCount = 1,
-      .pImageMemoryBarriers    = &toReadOnly,
-    });
+    cmd_buf.pipelineBarrier2(
+      vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toReadOnly,
+      });
   }
 }
 
@@ -2670,19 +2881,105 @@ void WorldRenderer::updateClipmapLevels()
   auto* levelData = reinterpret_cast<glm::vec4*>(clipmapLevelsBuffer.data());
   for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
   {
-    const float     step   = clipmapBaseStep * static_cast<float>(1 << level);
-    const float     snap   = 2.f * step;
+    const float step = clipmapBaseStep * static_cast<float>(1 << level);
+    const float snap = 2.f * step;
     const glm::vec2 center = glm::floor(camXZ / snap) * snap;
     const glm::vec2 origin = center - halfGrid * step;
     levelData[CLIPMAP_LEVELS - 1 - level] = glm::vec4(origin, step, 0.f);
   }
 }
 
+void WorldRenderer::renderFogPass(vk::CommandBuffer cmd_buf)
+{
+  ETNA_PROFILE_GPU(cmd_buf, fogPass);
+
+  // Подготовка layout'ов для compute-выборки:
+  //  - scene depth: depth attachment → sampled read
+  //  - shadow map: уже depthReadOnly, делаем видимой для compute-стейджа
+  //  - fog target: → general (storage write)
+  etna::set_state(
+    cmd_buf,
+    mainViewDepth.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eDepth);
+  etna::set_state(
+    cmd_buf,
+    shadowMap.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eDepthReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eDepth);
+  etna::set_state(
+    cmd_buf,
+    fogTarget.get(),
+    vk::PipelineStageFlagBits2::eComputeShader,
+    vk::AccessFlagBits2::eShaderStorageWrite,
+    vk::ImageLayout::eGeneral,
+    vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(cmd_buf);
+
+  struct FogPC
+  {
+    glm::mat4 invViewProj;
+    glm::mat4 lightViewProj;
+    glm::vec4 cameraPos;
+    glm::vec4 sunDir;
+    glm::vec4 sunColor;
+    glm::vec4 fogParams0; // density, heightFalloff, groundLevel, scatterCoef
+    glm::vec4 fogParams1; // extinctionCoef, phaseG, maxDistance, steps
+    glm::vec4 fogParams2; // noiseScale, noiseStrength, time, windSpeed
+    glm::vec4 windDir;    // xy = wind direction
+  };
+
+  auto info = etna::get_shader_program("fog");
+  auto bind0 = fogTarget.genBinding(
+    fogSampler.get(), vk::ImageLayout::eGeneral); // storage; sampler игнорируется
+  auto bind1 = shadowMap.genBinding(shadowSampler.get(), vk::ImageLayout::eDepthReadOnlyOptimal);
+  auto bind2 =
+    mainViewDepth.genBinding(depthPointSampler.get(), vk::ImageLayout::eShaderReadOnlyOptimal);
+
+  auto descSet = etna::create_descriptor_set(
+    info.getDescriptorLayoutId(0),
+    cmd_buf,
+    {etna::Binding{0, bind0}, etna::Binding{1, bind1}, etna::Binding{2, bind2}});
+  vk::DescriptorSet vkSet = descSet.getVkSet();
+
+  auto layout = fogPipeline.getVkPipelineLayout();
+  cmd_buf.bindPipeline(vk::PipelineBindPoint::eCompute, fogPipeline.getVkPipeline());
+  cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, 1, &vkSet, 0, nullptr);
+
+  const FogPC pc{
+    glm::inverse(worldViewProj),
+    lightViewProj,
+    glm::vec4(cameraWorldPos, 0.f),
+    glm::vec4(glm::normalize(sunDirection), 0.f),
+    glm::vec4(sunColor, sunIntensity),
+    glm::vec4(fogDensity, fogHeightFalloff, fogGroundLevel, fogScatterCoef),
+    glm::vec4(fogExtinctionCoef, fogPhaseG, fogMaxDistance, static_cast<float>(fogSteps)),
+    glm::vec4(fogNoiseScale, fogNoiseStrength, timeSec, fogWindSpeed),
+    glm::vec4(fogWindDir, 0.f, 0.f),
+  };
+  cmd_buf.pushConstants<FogPC>(layout, vk::ShaderStageFlagBits::eCompute, 0, {pc});
+
+  cmd_buf.dispatch((fogResolution.x + 7) / 8, (fogResolution.y + 7) / 8, 1);
+
+  etna::set_state(
+    cmd_buf,
+    fogTarget.get(),
+    vk::PipelineStageFlagBits2::eFragmentShader,
+    vk::AccessFlagBits2::eShaderSampledRead,
+    vk::ImageLayout::eShaderReadOnlyOptimal,
+    vk::ImageAspectFlagBits::eColor);
+  etna::flush_barriers(cmd_buf);
+}
+
 void WorldRenderer::renderShadowPass(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, shadowMapPass);
 
-  auto info  = etna::get_shader_program("clipmap_terrain_depth");
+  auto info = etna::get_shader_program("clipmap_terrain_depth");
   auto bind0 = clipmapHeightmapArray.genBinding(
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -2690,21 +2987,18 @@ void WorldRenderer::renderShadowPass(vk::CommandBuffer cmd_buf)
   auto bind2 = clipmapLevelsBuffer.genBinding();
 
   auto descSet = etna::create_descriptor_set(
-    info.getDescriptorLayoutId(0),
-    cmd_buf,
-    {etna::Binding{0, bind0}, etna::Binding{2, bind2}});
+    info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind0}, etna::Binding{2, bind2}});
 
   etna::RenderTargetState rt(
     cmd_buf,
     {{0, 0}, {SHADOWMAP_DIM, SHADOWMAP_DIM}},
-    {},  
+    {},
     {.image = shadowMap.get(), .view = shadowMap.getView({})});
 
   auto layout = terrainDepthPipeline.getVkPipelineLayout();
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, terrainDepthPipeline.getVkPipeline());
   vk::DescriptorSet vkSet = descSet.getVkSet();
-  cmd_buf.bindDescriptorSets(
-    vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+  cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
   cmd_buf.bindVertexBuffers(0, {clipmapMesh->vertexBuffer()}, {vk::DeviceSize{0}});
   cmd_buf.bindIndexBuffer(clipmapMesh->indexBuffer(), 0, vk::IndexType::eUint32);
 
@@ -2724,8 +3018,11 @@ void WorldRenderer::renderShadowPass(vk::CommandBuffer cmd_buf)
   constexpr uint32_t SHADOW_FIRST_INSTANCE = 4;
   constexpr uint32_t SHADOW_INSTANCE_COUNT = CLIPMAP_LEVELS - SHADOW_FIRST_INSTANCE;
   cmd_buf.drawIndexed(
-    clipmapFootprint.indexCount, SHADOW_INSTANCE_COUNT,
-    clipmapFootprint.firstIndex, clipmapFootprint.vertexOffset, SHADOW_FIRST_INSTANCE);
+    clipmapFootprint.indexCount,
+    SHADOW_INSTANCE_COUNT,
+    clipmapFootprint.firstIndex,
+    clipmapFootprint.vertexOffset,
+    SHADOW_FIRST_INSTANCE);
 }
 
 void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
@@ -2734,7 +3031,7 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
 
   const float heightScale = terrainHeightScale;
 
-  auto info  = etna::get_shader_program("clipmap_terrain");
+  auto info = etna::get_shader_program("clipmap_terrain");
   auto bind0 = clipmapHeightmapArray.genBinding(
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -2752,15 +3049,17 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
     detailSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
-  auto bind6 = shadowMap.genBinding(
-    shadowSampler.get(),
-    vk::ImageLayout::eDepthReadOnlyOptimal);
+  auto bind6 = shadowMap.genBinding(shadowSampler.get(), vk::ImageLayout::eDepthReadOnlyOptimal);
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0),
     cmd_buf,
-    {etna::Binding{0, bind0}, etna::Binding{2, bind2}, etna::Binding{3, bind3},
-     etna::Binding{4, bind4}, etna::Binding{5, bind5}, etna::Binding{6, bind6}});
+    {etna::Binding{0, bind0},
+     etna::Binding{2, bind2},
+     etna::Binding{3, bind3},
+     etna::Binding{4, bind4},
+     etna::Binding{5, bind5},
+     etna::Binding{6, bind6}});
   auto layout = clipmapTerrainPipeline.getVkPipelineLayout();
 
   const float scaleSigned = debugClipmapLevels ? -heightScale : heightScale;
@@ -2774,27 +3073,23 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
       showMorphAlpha ? 1.0f : 0.0f,
       static_cast<float>(liveLevelsCount),
       detailTilePeriod),
-    glm::vec4(
-      terrainHeightLow,
-      terrainHeightHigh,
-      terrainBlendSharpness,
-      terrainSlopeThreshold),
+    glm::vec4(terrainHeightLow, terrainHeightHigh, terrainBlendSharpness, terrainSlopeThreshold),
     lightViewProj,
     glm::vec4(enableShadows ? 1.f : 0.f, 0.f, 0.f, 0.f),
   };
 
   cmd_buf.bindPipeline(vk::PipelineBindPoint::eGraphics, clipmapTerrainPipeline.getVkPipeline());
   vk::DescriptorSet vkSet = descSet.getVkSet();
-  cmd_buf.bindDescriptorSets(
-    vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
+  cmd_buf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, 1, &vkSet, 0, nullptr);
   cmd_buf.bindVertexBuffers(0, {clipmapMesh->vertexBuffer()}, {vk::DeviceSize{0}});
   cmd_buf.bindIndexBuffer(clipmapMesh->indexBuffer(), 0, vk::IndexType::eUint32);
   cmd_buf.pushConstants<ClipmapPushConst>(
-    layout,
-    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-    0, {pc});
+    layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, {pc});
 
   cmd_buf.drawIndexed(
-    clipmapFootprint.indexCount, CLIPMAP_LEVELS,
-    clipmapFootprint.firstIndex, clipmapFootprint.vertexOffset, 0);
+    clipmapFootprint.indexCount,
+    CLIPMAP_LEVELS,
+    clipmapFootprint.firstIndex,
+    clipmapFootprint.vertexOffset,
+    0);
 }

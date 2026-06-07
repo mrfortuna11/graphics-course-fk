@@ -1,0 +1,153 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+
+// Volumetric fog (god rays) — raymarch в half-res
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform writeonly image2D fogOut;
+layout(binding = 1) uniform sampler2DShadow shadowMap; // compare → видимость солнца 0..1
+layout(binding = 2) uniform sampler2D       sceneDepth; // mainViewDepth, nearest
+
+layout(push_constant) uniform PC
+{
+  mat4 invViewProj;   
+  mat4 lightViewProj;  
+  vec4 cameraPos;      
+  vec4 sunDir;         
+  vec4 sunColor;       
+  vec4 fogParams0;     
+  vec4 fogParams1;     
+  vec4 fogParams2;     
+};
+
+const float PI = 3.14159265358979;
+
+float hg(float cosT, float g)
+{
+  float g2 = g * g;
+  float denom = 1.0 + g2 - 2.0 * g * cosT;
+  return (1.0 - g2) / (4.0 * PI * pow(max(denom, 1e-4), 1.5));
+}
+
+// Interleaved gradient noise 
+float ign(ivec2 p)
+{
+  return fract(52.9829189 * fract(dot(vec2(p), vec2(0.06711056, 0.00583715))));
+}
+
+float hash13(vec3 p)
+{
+  p = fract(p * 0.1031);
+  p += dot(p, p.yzx + 33.33);
+  return fract((p.x + p.y) * p.z);
+}
+
+float vnoise3(vec3 p)
+{
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f); // smoothstep
+  float n000 = hash13(i + vec3(0, 0, 0));
+  float n100 = hash13(i + vec3(1, 0, 0));
+  float n010 = hash13(i + vec3(0, 1, 0));
+  float n110 = hash13(i + vec3(1, 1, 0));
+  float n001 = hash13(i + vec3(0, 0, 1));
+  float n101 = hash13(i + vec3(1, 0, 1));
+  float n011 = hash13(i + vec3(0, 1, 1));
+  float n111 = hash13(i + vec3(1, 1, 1));
+  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+             mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+float fbm3(vec3 p)
+{
+  float v = 0.0, amp = 0.5;
+  for (int i = 0; i < 3; ++i)
+  {
+    v += amp * vnoise3(p);
+    p *= 2.0;
+    amp *= 0.5;
+  }
+  return v; // ~[0,1)
+}
+
+void main()
+{
+  ivec2 gid     = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 halfRes = imageSize(fogOut);
+  if (gid.x >= halfRes.x || gid.y >= halfRes.y)
+    return;
+
+  vec2 uv = (vec2(gid) + 0.5) / vec2(halfRes);
+
+  float depth = texture(sceneDepth, uv).r;
+  vec2 ndc = uv * 2.0 - 1.0;
+  vec4 wpos4 = invViewProj * vec4(ndc, depth, 1.0);
+  vec3 worldPos = wpos4.xyz / wpos4.w;
+
+  vec3 camPos = cameraPos.xyz;
+  vec3 toSurf = worldPos - camPos;
+  float rayLen = length(toSurf);
+  vec3 rayDir = rayLen > 1e-4 ? toSurf / rayLen : vec3(0, 0, 1);
+
+  float maxDist = fogParams1.z;
+  rayLen = min(rayLen, maxDist); 
+
+  float baseDensity = fogParams0.x;
+  float heightFall = max(fogParams0.y, 1e-3);
+  float groundLevel = fogParams0.z;
+  float scatterCoef = fogParams0.w;
+  float extinctCoef = fogParams1.x;
+  float phaseG = fogParams1.y;
+  int steps = int(fogParams1.w);
+  float noiseScale = fogParams2.x;
+  float noiseStr = fogParams2.y;
+  float time = fogParams2.z;
+  float windSpeed = fogParams2.w;
+  vec3 sunL = normalize(sunDir.xyz);
+  vec3 sunRadiance = sunColor.rgb * sunColor.a;
+
+  float phase = hg(dot(rayDir, sunL), phaseG);
+
+  float jit = ign(gid); // [0,1)
+  float stepLen = rayLen / float(max(steps, 1));
+
+  vec3  L = vec3(0.0);                  
+  float T = 1.0;                        
+
+  vec2 windOffset = windDir.xy * windSpeed * time;
+
+  for (int i = 0; i < steps; ++i)
+  {
+    vec3 P = camPos + rayDir * (float(i) + jit) * stepLen;
+
+    float heightFactor = exp(-max(P.y - groundLevel, 0.0) / heightFall);
+    vec3 noiseSamplePos = P * noiseScale + vec3(windOffset.x, 0.0, windOffset.y);
+    float noiseFactor = max(0.0, 1.0 + noiseStr * (fbm3(noiseSamplePos) - 0.5));
+    float density = baseDensity * heightFactor * noiseFactor;
+
+    float sigma   = density * extinctCoef;
+    vec3 scatter = density * scatterCoef * sunRadiance;
+
+    float sunVis = 1.0;
+    vec4 lp  = lightViewProj * vec4(P, 1.0);
+    vec3 ndcL = lp.xyz / lp.w;
+    vec2 sUV = ndcL.xy * 0.5 + 0.5;
+    if (all(greaterThanEqual(sUV, vec2(0.0))) &&
+        all(lessThanEqual(sUV, vec2(1.0))) &&
+        ndcL.z >= 0.0 && ndcL.z <= 1.0)
+    {
+      sunVis = texture(shadowMap, vec3(sUV, ndcL.z - 0.0005));
+    }
+
+    vec3 S = scatter * sunVis * phase;
+
+    float Tseg = exp(-sigma * stepLen);
+    vec3 Sint = (S - S * Tseg) / max(sigma, 1e-5);
+    L += T * Sint;
+    T *= Tseg;
+  }
+
+  imageStore(fogOut, gid, vec4(L, T));
+}

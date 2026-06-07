@@ -306,6 +306,29 @@ private:
   std::array<float, CASCADE_COUNT> cascadeSplitDepths{};
   float cascadeSplitLambda = 0.95f;
 
+  // Volumetric fog
+  etna::Image fogTarget;
+  etna::Sampler fogSampler;
+  etna::Sampler depthPointSampler;
+  etna::ComputePipeline fogPipeline{};
+  glm::uvec2 fogResolution{1u, 1u};
+  float timeSec = 0.f;
+
+  bool fogEnabled = true;
+  float fogDensity = 0.02f;
+  float fogHeightFalloff = 60.f;
+  float fogScatterCoef = 1.0f;
+  float fogExtinctionCoef = 1.0f;
+  float fogPhaseG = 0.76f;
+  int fogSteps = 48;
+  float fogMaxDistance = 2000.f;
+  float fogNoiseScale = 0.01f;
+  float fogNoiseStrength = 0.5f;
+  glm::vec2 fogWindDir = {1.f, 0.f};
+  float fogWindSpeed = 0.0f;
+
+  void renderFogPass(vk::CommandBuffer cmd_buf);
+
   void updateClipmapLevels();
   void renderShadowPass(vk::CommandBuffer cmd_buf);
   void updateCascades(const FramePacket& packet);
