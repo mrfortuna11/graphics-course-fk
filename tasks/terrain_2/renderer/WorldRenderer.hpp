@@ -315,9 +315,11 @@ private:
   float timeSec = 0.f;
 
   bool fogEnabled = true;
-  float fogDensity = 0.02f;
+  float fogDensity = 0.004f;
   float fogHeightFalloff = 60.f;
+  float fogGroundLevel = 0.f;
   float fogScatterCoef = 1.0f;
+  float fogAmbient = 0.3f;   // изотропное рассеяние света неба (серая дымка)
   float fogExtinctionCoef = 1.0f;
   float fogPhaseG = 0.76f;
   int fogSteps = 48;

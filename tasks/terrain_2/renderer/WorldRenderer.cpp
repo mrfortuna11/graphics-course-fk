@@ -808,6 +808,7 @@ void WorldRenderer::saveSettings(const std::filesystem::path& path) const
   SAVE_SCALAR(fogHeightFalloff);
   SAVE_SCALAR(fogGroundLevel);
   SAVE_SCALAR(fogScatterCoef);
+  SAVE_SCALAR(fogAmbient);
   SAVE_SCALAR(fogExtinctionCoef);
   SAVE_SCALAR(fogPhaseG);
   SAVE_SCALAR(fogSteps);
@@ -904,6 +905,7 @@ void WorldRenderer::loadSettings(const std::filesystem::path& path)
     LOAD_SCALAR(fogHeightFalloff);
     LOAD_SCALAR(fogGroundLevel);
     LOAD_SCALAR(fogScatterCoef);
+    LOAD_SCALAR(fogAmbient);
     LOAD_SCALAR(fogExtinctionCoef);
     LOAD_SCALAR(fogPhaseG);
     LOAD_SCALAR(fogSteps);
@@ -2302,11 +2304,12 @@ void WorldRenderer::drawGui()
   if (ImGui::CollapsingHeader("Volumetric Fog"))
   {
     ImGui::Checkbox("Enable fog", &fogEnabled);
-    ImGui::TextDisabled("(требует Enable shadows + clipmap terrain)");
+    ImGui::TextDisabled("(Enable shadows + clipmap terrain required)");
     ImGui::SliderFloat("Density", &fogDensity, 0.0f, 0.2f, "%.4f");
     ImGui::SliderFloat("Height falloff", &fogHeightFalloff, 1.0f, 500.f, "%.0f");
     ImGui::SliderFloat("Ground level", &fogGroundLevel, -100.f, 400.f, "%.0f");
     ImGui::SliderFloat("Scatter coef", &fogScatterCoef, 0.0f, 4.0f, "%.2f");
+    ImGui::SliderFloat("Ambient (haze)", &fogAmbient, 0.0f, 2.0f, "%.2f");
     ImGui::SliderFloat("Extinction coef", &fogExtinctionCoef, 0.0f, 4.0f, "%.2f");
     ImGui::SliderFloat("Phase g", &fogPhaseG, -0.9f, 0.9f, "%.2f");
     ImGui::SliderInt("Steps (quality)", &fogSteps, 8, 128);
@@ -2847,7 +2850,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
     srcH = dstH;
   }
 
-  // All mips: eGeneral -> eShaderReadOnlyOptimal for fragment trilinear sampling.
+  // All mips: eGeneral -> eShaderReadOnlyOptimal for fragment trilinear sampling
   {
     vk::ImageMemoryBarrier2 toReadOnly{
       .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
@@ -2893,10 +2896,6 @@ void WorldRenderer::renderFogPass(vk::CommandBuffer cmd_buf)
 {
   ETNA_PROFILE_GPU(cmd_buf, fogPass);
 
-  // Подготовка layout'ов для compute-выборки:
-  //  - scene depth: depth attachment → sampled read
-  //  - shadow map: уже depthReadOnly, делаем видимой для compute-стейджа
-  //  - fog target: → general (storage write)
   etna::set_state(
     cmd_buf,
     mainViewDepth.get(),
@@ -2959,7 +2958,7 @@ void WorldRenderer::renderFogPass(vk::CommandBuffer cmd_buf)
     glm::vec4(fogDensity, fogHeightFalloff, fogGroundLevel, fogScatterCoef),
     glm::vec4(fogExtinctionCoef, fogPhaseG, fogMaxDistance, static_cast<float>(fogSteps)),
     glm::vec4(fogNoiseScale, fogNoiseStrength, timeSec, fogWindSpeed),
-    glm::vec4(fogWindDir, 0.f, 0.f),
+    glm::vec4(fogWindDir, fogAmbient, 0.f),
   };
   cmd_buf.pushConstants<FogPC>(layout, vk::ShaderStageFlagBits::eCompute, 0, {pc});
 

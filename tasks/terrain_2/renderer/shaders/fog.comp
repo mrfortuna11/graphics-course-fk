@@ -16,9 +16,10 @@ layout(push_constant) uniform PC
   vec4 cameraPos;      
   vec4 sunDir;         
   vec4 sunColor;       
-  vec4 fogParams0;     
-  vec4 fogParams1;     
-  vec4 fogParams2;     
+  vec4 fogParams0;
+  vec4 fogParams1;
+  vec4 fogParams2;
+  vec4 windDir;     
 };
 
 const float PI = 3.14159265358979;
@@ -105,8 +106,13 @@ void main()
   float noiseStr = fogParams2.y;
   float time = fogParams2.z;
   float windSpeed = fogParams2.w;
+  float ambientStr = windDir.z; // изотропное рассеяние неба
   vec3 sunL = normalize(sunDir.xyz);
   vec3 sunRadiance = sunColor.rgb * sunColor.a;
+
+  // Цвет ambient-дымки (мягкий небесно-серый). Делает туман видимым в тени и
+  // в стороне от солнца, где прямого света нет (HG-фаза ≈ 0).
+  const vec3 AMBIENT_TINT = vec3(0.5, 0.6, 0.75);
 
   float phase = hg(dot(rayDir, sunL), phaseG);
 
@@ -128,7 +134,7 @@ void main()
     float density = baseDensity * heightFactor * noiseFactor;
 
     float sigma   = density * extinctCoef;
-    vec3 scatter = density * scatterCoef * sunRadiance;
+    float scatterAmt = density * scatterCoef;
 
     float sunVis = 1.0;
     vec4 lp  = lightViewProj * vec4(P, 1.0);
@@ -141,7 +147,9 @@ void main()
       sunVis = texture(shadowMap, vec3(sUV, ndcL.z - 0.0005));
     }
 
-    vec3 S = scatter * sunVis * phase;
+    // Прямой солнечный свет (god rays, направленно вперёд через HG-фазу)
+    // + изотропная дымка неба (видна везде, в т.ч. в тени).
+    vec3 S = scatterAmt * (sunRadiance * sunVis * phase + AMBIENT_TINT * ambientStr);
 
     float Tseg = exp(-sigma * stepLen);
     vec3 Sint = (S - S * Tseg) / max(sigma, 1e-5);
