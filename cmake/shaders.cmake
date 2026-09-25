@@ -75,7 +75,7 @@ function(target_add_shaders tgt)
 
     add_custom_target(${custom_target_name} DEPENDS ${SPIRV_BINARY_FILES})
     add_dependencies(${tgt} ${custom_target_name})
-    add_compile_definitions(${tgt}
+    target_compile_definitions(${tgt}
       PRIVATE $<UPPER_CASE:${tgt}>_SHADERS_ROOT="${shader_binaries_dir}")
   endif()
 endfunction()

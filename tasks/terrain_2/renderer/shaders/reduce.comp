@@ -1,0 +1,112 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "luminance_common.glsl"
+
+// Single workgroup, one thread per histogram bin.
+// Weighted-average log-luminance → exposure → exponential temporal smoothing.
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer LuminanceStats
+{
+  uint  minLogLumBits;
+  uint  maxLogLumBits;
+  uint  histogram[HISTOGRAM_BINS];
+  float smoothedExposure;
+} stats;
+
+layout(push_constant) uniform PC
+{
+  float deltaTime;
+  float adaptationSpeed;
+  float keyValue;
+  float minExposure;
+  float maxExposure;
+} pc;
+
+shared float s_sum[HISTOGRAM_BINS];
+shared uint  s_count[HISTOGRAM_BINS];
+shared uint  s_prefix[HISTOGRAM_BINS];
+shared uint  s_total;
+
+void main()
+{
+  const uint i = gl_LocalInvocationIndex;
+
+  float minLog = uintBitsToFloat(stats.minLogLumBits) - LOG_LUM_OFFSET;
+  float maxLog = uintBitsToFloat(stats.maxLogLumBits) - LOG_LUM_OFFSET;
+  float range  = max(maxLog - minLog, 1e-4);
+
+  float binCenterT  = (float(i) + 0.5) / float(HISTOGRAM_BINS);
+  float binLogLum   = minLog + binCenterT * range;
+
+  s_count[i] = stats.histogram[i];
+  s_sum[i]   = binLogLum * float(s_count[i]);
+
+  if (i == 0u) s_total = 0u;
+  barrier();
+
+  atomicAdd(s_total, s_count[i]);
+  barrier();
+
+  uint total = s_total;
+  uint lowCut  = uint(float(total) * 0.10);
+  uint highCut = uint(float(total) * 0.95);
+
+  s_prefix[i] = s_count[i];
+  barrier();
+
+  for (uint stride = 1u; stride < HISTOGRAM_BINS; stride <<= 1u)
+  {
+    uint val = (i >= stride) ? s_prefix[i - stride] : 0u;
+    barrier();
+    s_prefix[i] += val;
+    barrier();
+  }
+
+  uint cumEnd   = s_prefix[i];
+  uint cumStart = (i > 0u) ? s_prefix[i - 1u] : 0u;
+
+  uint binLow  = cumStart;
+  uint binHigh = cumEnd;
+
+  uint trimLow  = max(binLow,  lowCut);
+  uint trimHigh = min(binHigh, highCut);
+  uint trimmed  = (trimHigh > trimLow) ? (trimHigh - trimLow) : 0u;
+
+  s_sum[i]   = binLogLum * float(trimmed);
+  s_count[i] = trimmed;
+  barrier();
+
+  for (uint stride = 64u; stride > 0u; stride >>= 1u)
+  {
+    if (i < stride)
+    {
+      s_sum[i]   += s_sum[i + stride];
+      s_count[i] += s_count[i + stride];
+    }
+    barrier();
+  }
+
+  if (i == 0u)
+  {
+    float totalTrimmed = float(max(s_count[0], 1u));
+    float avgLogLum    = s_sum[0] / totalTrimmed;
+    float avgLum       = exp2(avgLogLum);
+
+    float target = clamp(pc.keyValue / max(avgLum, 1e-5), pc.minExposure, pc.maxExposure);
+
+    float prev = stats.smoothedExposure;
+    float newExp;
+    if (prev <= 0.0)
+    {
+      newExp = target;
+    }
+    else
+    {
+      float alpha = 1.0 - exp(-pc.deltaTime * pc.adaptationSpeed);
+      newExp = mix(prev, target, alpha);
+    }
+    stats.smoothedExposure = newExp;
+  }
+}

@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "luminance_common.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer LuminanceStats
+{
+  uint  minLogLumBits;
+  uint  maxLogLumBits;
+  uint  histogram[HISTOGRAM_BINS];
+  float smoothedExposure;
+} stats;
+
+void main()
+{
+  uint i = gl_LocalInvocationIndex;
+  if (i < HISTOGRAM_BINS)
+    stats.histogram[i] = 0u;
+
+  if (i == 0u)
+  {
+    // min seed = LOG_LUM_RANGE (biggest possible), max seed = 0.0 
+    stats.minLogLumBits = floatBitsToUint(LOG_LUM_RANGE);
+    stats.maxLogLumBits = floatBitsToUint(0.0);
+  }
+}

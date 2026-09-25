@@ -1,0 +1,101 @@
+#version 450
+
+// Bakes per-level splatted albedo into a 2D-array texture (256² × CLIPMAP_LEVELS)
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2DArray heightmapArray;
+layout(binding = 1, rgba8) writeonly uniform image2DArray albedoArray;
+layout(binding = 2) uniform sampler2DArray detailColorArray;
+layout(binding = 3) uniform sampler2DArray detailHeightArray;
+
+layout(push_constant) uniform PC
+{
+  vec2  levelOrigin;
+  float gridStep;
+  int   levelIdx;
+  float heightScale;
+  float detailTilePeriod;
+  float _pad0;
+  float _pad1;
+  vec4  splatParams;  // heightLow, heightHigh, blendSharp, slopeThreshold
+};
+
+const float HEIGHTMAP_SIZE = 256.0;
+const int   HEIGHTMAP_SIZE_I = 256;
+
+float sampleH(ivec2 c)
+{
+  c = clamp(c, ivec2(0), ivec2(HEIGHTMAP_SIZE_I - 1));
+  vec2 uv = (vec2(c) + 0.5) / HEIGHTMAP_SIZE;
+  return texture(heightmapArray, vec3(uv, float(levelIdx))).r;
+}
+
+void main()
+{
+  ivec2 c = ivec2(gl_GlobalInvocationID.xy);
+  if (c.x >= HEIGHTMAP_SIZE_I || c.y >= HEIGHTMAP_SIZE_I)
+    return;
+
+  vec2 worldXZ = levelOrigin + vec2(c) * gridStep;
+
+  float hC = sampleH(c);
+  float hL = sampleH(c + ivec2(-1,  0));
+  float hR = sampleH(c + ivec2( 1,  0));
+  float hD = sampleH(c + ivec2( 0, -1));
+  float hU = sampleH(c + ivec2( 0,  1));
+
+  float worldY = hC * heightScale;
+  vec3 n = normalize(vec3(
+    (hL - hR) * heightScale,
+    2.0 * gridStep,
+    (hD - hU) * heightScale));
+  float slope = 1.0 - clamp(n.y, 0.0, 1.0);
+
+  float heightLow  = splatParams.x;
+  float heightHigh = splatParams.y;
+  float blendSharp = max(splatParams.z, 0.5);
+  float slopeThr   = splatParams.w;
+
+  float wGround = 1.0 - smoothstep(heightLow - blendSharp, heightLow + blendSharp, worldY);
+  float wSnow   = smoothstep(heightHigh - blendSharp, heightHigh + blendSharp, worldY);
+  float wGrass  = clamp(1.0 - wGround - wSnow, 0.0, 1.0);
+  float wRock   = smoothstep(slopeThr - 0.15, slopeThr + 0.05, slope);
+  wGrass  *= (1.0 - wRock);
+  wGround *= (1.0 - wRock);
+  wSnow   *= (1.0 - wRock);
+
+  const float TILE_PERIOD = max(detailTilePeriod, 1.0);
+  const float DETAIL_TEX_SIZE = 1024.0;
+  const float DETAIL_MAX_LOD  = 10.0; 
+  float detailLod = clamp(
+    log2(gridStep / TILE_PERIOD * DETAIL_TEX_SIZE), 0.0, DETAIL_MAX_LOD);
+
+  vec2 tileUV = worldXZ / TILE_PERIOD;
+  float dh0 = textureLod(detailHeightArray, vec3(tileUV, 0.0), detailLod).r;
+  float dh1 = textureLod(detailHeightArray, vec3(tileUV, 1.0), detailLod).r;
+  float dh2 = textureLod(detailHeightArray, vec3(tileUV, 2.0), detailLod).r;
+  float dh3 = textureLod(detailHeightArray, vec3(tileUV, 3.0), detailLod).r;
+
+  const float HB_BIAS = 0.2;
+  float r0 = wGround + dh0;
+  float r1 = wGrass  + dh1;
+  float r2 = wRock   + dh2;
+  float r3 = wSnow   + dh3;
+  float rMax = max(max(r0, r1), max(r2, r3));
+  float hbBias = rMax - HB_BIAS;
+  r0 = max(r0 - hbBias, 0.0);
+  r1 = max(r1 - hbBias, 0.0);
+  r2 = max(r2 - hbBias, 0.0);
+  r3 = max(r3 - hbBias, 0.0);
+  float rTot = r0 + r1 + r2 + r3;
+  if (rTot < 1e-6) rTot = 1.0;
+  r0 /= rTot; r1 /= rTot; r2 /= rTot; r3 /= rTot;
+
+  vec3 c0 = textureLod(detailColorArray, vec3(tileUV, 0.0), detailLod).rgb;
+  vec3 c1 = textureLod(detailColorArray, vec3(tileUV, 1.0), detailLod).rgb;
+  vec3 c2 = textureLod(detailColorArray, vec3(tileUV, 2.0), detailLod).rgb;
+  vec3 c3 = textureLod(detailColorArray, vec3(tileUV, 3.0), detailLod).rgb;
+
+  vec3 albedo = c0*r0 + c1*r1 + c2*r2 + c3*r3;
+  imageStore(albedoArray, ivec3(c, levelIdx), vec4(albedo, 1.0));
+}
