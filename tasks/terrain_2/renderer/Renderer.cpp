@@ -150,7 +150,9 @@ void Renderer::drawFrame()
     {
       ETNA_PROFILE_GPU(currentCmdBuf, renderFrame);
 
-      worldRenderer->renderWorld(currentCmdBuf, image, view);
+      worldRenderer->renderWorld(
+        currentCmdBuf, image, view, frameIndex % WorldRenderer::FRAMES_IN_FLIGHT);
+      ++frameIndex;
 
       {
         ImDrawData* pDrawData = ImGui::GetDrawData();
@@ -179,6 +181,12 @@ void Renderer::drawFrame()
 
     if (!presented)
       nextSwapchainImage = std::nullopt;
+
+    if (!oneTimeGpuInitFlushed)
+    {
+      ETNA_CHECK_VK_RESULT(etna::get_context().getDevice().waitIdle());
+      oneTimeGpuInitFlushed = true;
+    }
   }
 
   if (!nextSwapchainImage && resolutionProvider() != glm::uvec2{0, 0})

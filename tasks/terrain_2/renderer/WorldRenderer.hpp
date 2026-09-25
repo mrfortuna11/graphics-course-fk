@@ -48,10 +48,17 @@ public:
   float findZNear() const;
 
   void renderWorld(
-    vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view);
+    vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view,
+    std::size_t frame_index);
 
   void saveSettings(const std::filesystem::path& path) const;
   void loadSettings(const std::filesystem::path& path);
+  static constexpr std::size_t FRAMES_IN_FLIGHT = 2;
+  std::size_t currentFrameIndex = 0;
+  
+  std::array<etna::Buffer, FRAMES_IN_FLIGHT> clipmapLevelsBuffers;
+  std::array<etna::Image, FRAMES_IN_FLIGHT> clipmapHeightmapArrays;
+  std::array<etna::Image, FRAMES_IN_FLIGHT> clipmapAlbedoArrays;
 
 private:
   // Performs frustum culling and prepares instance data for rendering
@@ -79,7 +86,6 @@ private:
   void renderTerrain(vk::CommandBuffer cmd_buf);
 
   std::filesystem::path modifyPathForBaking(std::filesystem::path path) const;
-
 
 private:
   std::unique_ptr<SceneManager> sceneMgr;
@@ -276,9 +282,6 @@ private:
   // Ridged multifractal
   float terrainRidgedSharpness = 2.0f;
 
-  // xy=levelOrigin, z=gridStep
-  etna::Buffer clipmapLevelsBuffer;
-
   void updateClipmapHeightmaps(vk::CommandBuffer cmd_buf);
   void updateClipmapAlbedos(vk::CommandBuffer cmd_buf);
   void renderClipmapTerrain(vk::CommandBuffer cmd_buf);
@@ -319,7 +322,7 @@ private:
   float fogHeightFalloff = 60.f;
   float fogGroundLevel = 0.f;
   float fogScatterCoef = 1.0f;
-  float fogAmbient = 0.3f;   // изотропное рассеяние света неба (серая дымка)
+  float fogAmbient = 0.3f;   
   float fogExtinctionCoef = 1.0f;
   float fogPhaseG = 0.76f;
   int fogSteps = 48;

@@ -239,8 +239,6 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .name = "relemWriteCursors",
     });
 
-  // indirectBuffer: VkDrawIndexedIndirectCommand (5×uint32)
-  // drawMappingBuffer: one uint32 per visible relem
   const vk::DeviceSize maxDrawsBytes = 10000u * sizeof(vk::DrawIndexedIndirectCommand);
   indirectBuffer = ctx.createBuffer(
     etna::Buffer::CreateInfo{
@@ -291,25 +289,31 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
   clipmapMesh = std::make_unique<ClipmapMesh>(255, *transferHelper);
   clipmapFootprint = clipmapMesh->buildLevelFootprints().front();
 
-  clipmapHeightmapArray = ctx.createImage(
-    etna::Image::CreateInfo{
-      .extent = vk::Extent3D{256, 256, 1},
-      .name = "clipmap_heightmap_array",
-      .format = vk::Format::eR32Sfloat,
-      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
-      .layers = static_cast<std::size_t>(CLIPMAP_LEVELS),
-    });
+  for (etna::Image& img : clipmapHeightmapArrays)
+  {
+    img = ctx.createImage(
+      etna::Image::CreateInfo{
+        .extent = vk::Extent3D{256, 256, 1},
+        .name = "clipmap_heightmap_array",
+        .format = vk::Format::eR32Sfloat,
+        .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage,
+        .layers = static_cast<std::size_t>(CLIPMAP_LEVELS),
+      });
+  }
 
-  clipmapAlbedoArray = ctx.createImage(
-    etna::Image::CreateInfo{
-      .extent = vk::Extent3D{256, 256, 1},
-      .name = "clipmap_albedo_array",
-      .format = vk::Format::eR8G8B8A8Unorm,
-      .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
-        vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
-      .layers = static_cast<std::size_t>(CLIPMAP_LEVELS),
-      .mipLevels = static_cast<std::size_t>(CLIPMAP_ALBEDO_MIPS),
-    });
+  for (etna::Image& img : clipmapAlbedoArrays)
+  {
+    img = ctx.createImage(
+      etna::Image::CreateInfo{
+        .extent = vk::Extent3D{256, 256, 1},
+        .name = "clipmap_albedo_array",
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .imageUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+          vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+        .layers = static_cast<std::size_t>(CLIPMAP_LEVELS),
+        .mipLevels = static_cast<std::size_t>(CLIPMAP_ALBEDO_MIPS),
+      });
+  }
 
   detailTex = ctx.createImage(
     etna::Image::CreateInfo{
@@ -321,14 +325,17 @@ void WorldRenderer::allocateResources(glm::uvec2 swapchain_resolution)
       .mipLevels = static_cast<std::size_t>(DETAIL_TEX_MIPS),
     });
 
-  clipmapLevelsBuffer = ctx.createBuffer(
-    etna::Buffer::CreateInfo{
-      .size = CLIPMAP_LEVELS * sizeof(glm::vec4),
-      .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
-      .memoryUsage = VMA_MEMORY_USAGE_CPU_TO_GPU,
-      .name = "clipmap_levels",
-    });
-  clipmapLevelsBuffer.map();
+  for (etna::Buffer& buf : clipmapLevelsBuffers)
+  {
+    buf = ctx.createBuffer(
+      etna::Buffer::CreateInfo{
+        .size = CLIPMAP_LEVELS * sizeof(glm::vec4),
+        .bufferUsage = vk::BufferUsageFlagBits::eStorageBuffer,
+        .memoryUsage = VMA_MEMORY_USAGE_CPU_TO_GPU,
+        .name = "clipmap_levels",
+      });
+    buf.map();
+  }
 
   static constexpr std::size_t DETAIL_ARRAY_MIPS = 11;
   detailColorArray = ctx.createImage(
@@ -469,7 +476,6 @@ void WorldRenderer::uploadSceneTextures()
     }
   }
 
-  // Upload persistent scene geometry buffers for GPU culling
   {
     auto instanceMatrices = sceneMgr->getInstanceMatrices();
     auto instanceMeshes = sceneMgr->getInstanceMeshes();
@@ -500,7 +506,6 @@ void WorldRenderer::uploadSceneTextures()
 
     if (sceneRelemCount > 0)
     {
-      // AABB in two vec4: mn.xyz+pad, mx.xyz+pad
       std::vector<glm::vec4> gpuAabbs;
       gpuAabbs.reserve(aabbs.size() * 2);
       for (const auto& a : aabbs)
@@ -709,7 +714,6 @@ void WorldRenderer::loadDetailTextures()
         &blit,
         vk::Filter::eLinear);
 
-      // Mip m: TransferDst -> TransferSrc (ready as source for next iteration)
       barrierMip(
         m,
         1,
@@ -1070,11 +1074,6 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
             },
         });
 
-  // Depth-only pipeline для shadow pass'а. Vertex input идентичен color path,
-  // но: нет color attachments, включён pipeline-level depth bias (борьба с
-  // shadow acne на наклонных поверхностях). blendingConfig.attachments = {}
-  // нужно явно — иначе etna выставит 1 attachment по умолчанию, что не
-  // совпадёт с пустым colorAttachmentFormats.
   terrainDepthPipeline =
     pipelineManager
       .createGraphicsPipeline(
@@ -1135,8 +1134,6 @@ void WorldRenderer::setupPipelines(vk::Format swapchain_format)
         },
     });
 
-  // Skybox: depth test enabled, depth write OFF. Vertex shader puts the
-  // fullscreen tri at z = 1, so it only passes where nothing was drawn
   skyboxPipeline = pipelineManager.createGraphicsPipeline(
     "skybox",
     etna::GraphicsPipeline::CreateInfo{
@@ -1503,8 +1500,13 @@ void WorldRenderer::renderScene(
 }
 
 void WorldRenderer::renderWorld(
-  vk::CommandBuffer cmd_buf, vk::Image target_image, vk::ImageView target_image_view)
+  vk::CommandBuffer cmd_buf,
+  vk::Image target_image,
+  vk::ImageView target_image_view,
+  std::size_t frame_index)
 {
+  currentFrameIndex = frame_index % FRAMES_IN_FLIGHT;
+
   ETNA_PROFILE_GPU(cmd_buf, renderWorld);
 
   /*if (logEnabled && (logFrameCounter++ % 60u) == 0u)
@@ -2545,7 +2547,7 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
 
   etna::set_state(
     cmd_buf,
-    clipmapHeightmapArray.get(),
+    clipmapHeightmapArrays[currentFrameIndex].get(),
     vk::PipelineStageFlagBits2::eComputeShader,
     vk::AccessFlagBits2::eShaderStorageWrite,
     vk::ImageLayout::eGeneral,
@@ -2576,7 +2578,7 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
   };
 
   auto fillInfo = etna::get_shader_program("clipmap_fill");
-  auto fillBind = clipmapHeightmapArray.genBinding(
+  auto fillBind = clipmapHeightmapArrays[currentFrameIndex].genBinding(
     clipmapSampler.get(),
     vk::ImageLayout::eGeneral,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
@@ -2635,7 +2637,7 @@ void WorldRenderer::updateClipmapHeightmaps(vk::CommandBuffer cmd_buf)
 
   etna::set_state(
     cmd_buf,
-    clipmapHeightmapArray.get(),
+    clipmapHeightmapArrays[currentFrameIndex].get(),
     vk::PipelineStageFlagBits2::eVertexShader,
     vk::AccessFlagBits2::eShaderSampledRead,
     vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -2653,7 +2655,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
 
   etna::set_state(
     cmd_buf,
-    clipmapHeightmapArray.get(),
+    clipmapHeightmapArrays[currentFrameIndex].get(),
     vk::PipelineStageFlagBits2::eComputeShader,
     vk::AccessFlagBits2::eShaderSampledRead,
     vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -2668,7 +2670,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
       .oldLayout = vk::ImageLayout::eUndefined,
       .newLayout = vk::ImageLayout::eGeneral,
-      .image = clipmapAlbedoArray.get(),
+      .image = clipmapAlbedoArrays[currentFrameIndex].get(),
       .subresourceRange =
         vk::ImageSubresourceRange{
           .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -2698,12 +2700,12 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
   }; // 48
 
   auto info = etna::get_shader_program("clipmap_splat");
-  auto bindH = clipmapHeightmapArray.genBinding(
+  auto bindH = clipmapHeightmapArrays[currentFrameIndex].genBinding(
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
   // Storage-image view must be single-mip; bind only mip 0 for the compute write.
-  auto bindA = clipmapAlbedoArray.genBinding(
+  auto bindA = clipmapAlbedoArrays[currentFrameIndex].genBinding(
     clipmapSampler.get(),
     vk::ImageLayout::eGeneral,
     etna::Image::ViewParams{
@@ -2770,7 +2772,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
       .oldLayout = vk::ImageLayout::eGeneral,
       .newLayout = vk::ImageLayout::eGeneral,
-      .image = clipmapAlbedoArray.get(),
+      .image = clipmapAlbedoArrays[currentFrameIndex].get(),
       .subresourceRange =
         vk::ImageSubresourceRange{
           .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -2812,9 +2814,9 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{dstW, dstH, 1}},
     };
     cmd_buf.blitImage(
-      clipmapAlbedoArray.get(),
+      clipmapAlbedoArrays[currentFrameIndex].get(),
       vk::ImageLayout::eGeneral,
-      clipmapAlbedoArray.get(),
+      clipmapAlbedoArrays[currentFrameIndex].get(),
       vk::ImageLayout::eGeneral,
       1,
       &blit,
@@ -2829,7 +2831,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
         .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
         .oldLayout = vk::ImageLayout::eGeneral,
         .newLayout = vk::ImageLayout::eGeneral,
-        .image = clipmapAlbedoArray.get(),
+        .image = clipmapAlbedoArrays[currentFrameIndex].get(),
         .subresourceRange =
           vk::ImageSubresourceRange{
             .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -2859,7 +2861,7 @@ void WorldRenderer::updateClipmapAlbedos(vk::CommandBuffer cmd_buf)
       .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
       .oldLayout = vk::ImageLayout::eGeneral,
       .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-      .image = clipmapAlbedoArray.get(),
+      .image = clipmapAlbedoArrays[currentFrameIndex].get(),
       .subresourceRange =
         vk::ImageSubresourceRange{
           .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -2881,7 +2883,8 @@ void WorldRenderer::updateClipmapLevels()
 {
   const float halfGrid = static_cast<float>(clipmapMesh->n() - 1) * 0.5f;
   const glm::vec2 camXZ{cameraWorldPos.x, cameraWorldPos.z};
-  auto* levelData = reinterpret_cast<glm::vec4*>(clipmapLevelsBuffer.data());
+  glm::vec4* levelData =
+    reinterpret_cast<glm::vec4*>(clipmapLevelsBuffers[currentFrameIndex].data());
   for (int level = CLIPMAP_LEVELS - 1; level >= 0; --level)
   {
     const float step = clipmapBaseStep * static_cast<float>(1 << level);
@@ -2979,11 +2982,11 @@ void WorldRenderer::renderShadowPass(vk::CommandBuffer cmd_buf)
   ETNA_PROFILE_GPU(cmd_buf, shadowMapPass);
 
   auto info = etna::get_shader_program("clipmap_terrain_depth");
-  auto bind0 = clipmapHeightmapArray.genBinding(
+  auto bind0 = clipmapHeightmapArrays[currentFrameIndex].genBinding(
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
-  auto bind2 = clipmapLevelsBuffer.genBinding();
+  auto bind2 = clipmapLevelsBuffers[currentFrameIndex].genBinding();
 
   auto descSet = etna::create_descriptor_set(
     info.getDescriptorLayoutId(0), cmd_buf, {etna::Binding{0, bind0}, etna::Binding{2, bind2}});
@@ -3031,12 +3034,12 @@ void WorldRenderer::renderClipmapTerrain(vk::CommandBuffer cmd_buf)
   const float heightScale = terrainHeightScale;
 
   auto info = etna::get_shader_program("clipmap_terrain");
-  auto bind0 = clipmapHeightmapArray.genBinding(
+  auto bind0 = clipmapHeightmapArrays[currentFrameIndex].genBinding(
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});
-  auto bind2 = clipmapLevelsBuffer.genBinding();
-  auto bind3 = clipmapAlbedoArray.genBinding(
+  auto bind2 = clipmapLevelsBuffers[currentFrameIndex].genBinding();
+  auto bind3 = clipmapAlbedoArrays[currentFrameIndex].genBinding(
     perlinSampler.get(),
     vk::ImageLayout::eShaderReadOnlyOptimal,
     etna::Image::ViewParams{.type = vk::ImageViewType::e2DArray});

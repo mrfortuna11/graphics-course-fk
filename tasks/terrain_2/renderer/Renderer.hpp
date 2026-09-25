@@ -41,6 +41,9 @@ private:
   glm::uvec2 resolution;
   bool useVsync = true;
 
+  std::size_t frameIndex = 0;
+  bool oneTimeGpuInitFlushed = false;
+
   std::unique_ptr<WorldRenderer> worldRenderer;
   std::unique_ptr<ImGuiRenderer> guiRenderer;
   std::unique_ptr<etna::PerFrameCmdMgr> commandManager;
